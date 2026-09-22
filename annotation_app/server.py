@@ -64,6 +64,7 @@ def get_image_size(path: Path) -> tuple[int, int]:
 
 class AnnotationServer(ThreadingHTTPServer):
     daemon_threads = False
+    allow_reuse_address = True
 
     def __init__(
         self,
