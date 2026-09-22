@@ -1,92 +1,176 @@
-# Agent Status: AnyText2 Baseline vs Font Mimic A/B Experiment
+# Agent Status: Local Character BBox Annotation Tool
 
-Updated: 2026-09-22T09:20:00.000Z
-Status: COMPLETED (A/B REVIEW EVIDENCE READY)
+Updated: 2026-09-22T10:45:00.000Z
+Status: COMPLETED (VERIFIED LOCALLY & SYNCHRONIZED TO SERVER)
 
 ## Overview
-Successfully executed the controlled AnyText2 A/B experiment defined in `.ai-bridge/current-plan.md` on the representative tight-crop SLP (`东泰168` -> `苏航268`):
-- **Question Tested**: Does AnyText2's native Font Mimic / font-hint conditioning materially improve style preservation when editing the text from `东泰168` to `苏航268`?
-- **Condition A (Baseline)**: Native AnyText2 edit with `font_hint_image = [None] * 5`, `font_hint_mask = [None] * 5`.
-- **Condition B (Font Mimic)**: Native AnyText2 edit with `font_hint_image` populated with reference image RGB and `font_hint_mask` populated with user mask.
-- All other generation parameters (seed, steps, CFG scale, strength=1.0, prompts, resolution policy) strictly held identical between A and B.
+
+Successfully implemented and verified the local character-level bounding box annotation tool defined in `.ai-bridge/current-plan.md` ("Build local character bbox annotation tool") by auditing and reusing the architecture and interaction patterns from `/home/kyrie/cxprojects/SLPAnnotation`.
+
+The tool enables annotating:
+1. One rectangular bounding box per visible character/glyph;
+2. Text content of each character;
+3. Sequential reading order.
+
+All operations run locally with strict coordinate integrity in original image pixel space, debounced auto-save to canonical JSONL, and explicit server synchronization to `server-zyx:/mnt/data/zyx/SynSLP/annotations/`.
 
 ---
 
-## Fixed Inputs & Paths
+## Step 1: Read-Only Reuse Audit of `SLPAnnotation`
 
-- **Server**: `server-zyx` (`/mnt/data/zyx/SynSLP`)
-- **Reference Image**: `/mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg` (`239 x 57`, 3-channel BGR uint8)
-- **Mask Image**: `/mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png` (`239 x 57`, binary `[0, 255]`, 87.79% editable)
-- **Target Text**: `"苏航268"`
-
----
-
-## Native Font Mimic API Semantics (Upstream AnyText2 Analysis)
-
-Detailed findings from inspecting pinned upstream AnyText2 commit `b06c583a583818f3679665ef67b51363f107853c`:
-1. **Parameter Definitions**:
-   - `font_hint_image`: List of length 5 (or matching text line count). Slot 0 accepts a 3-channel RGB `numpy.ndarray` (`(H, W, 3)`, uint8, values 0-255).
-   - `font_hint_mask`: List of length 5. Slot 0 accepts a single-channel `numpy.ndarray` (`(H, W)` or `(H, W, 1)`, uint8) where pixels > 0 indicate the source text/glyph region to mimic.
-2. **Internal Processing**:
-   - In `ms_wrapper.py:197-205`: When `font_hint_image[i]` is not None, `find_polygon` finds the contour of `font_hint_mask[i]`.
-   - `draw_font_hint((font_hint_image[i]/127.5 - 1), poly)` extracts the localized font patch.
-   - `crop_image` crops the oriented bounding box patch.
-   - `ms_wrapper.py` sets `font_paths[i] = 'None'` so the external TTF font renderer is skipped for that line.
-   - In `cldm/embedding_manager.py:253-264`: The cropped hint patch (`mimic_img`) is passed into the OCR/vision embedding branch as `style_line`, setting `style_flag = 1`.
-3. **Format Preprocessing for Experiment**:
-   - In-memory deterministic resolution scaling: Reference image scaled to `(512 x 128 x 3)` via Lanczos4 interpolation; user mask scaled to `(512 x 128 x 1)` via Nearest Neighbor interpolation.
-   - No erosion, dilation, redrawing, or modification of the user's mask was performed.
+- **Source Path**: `/home/kyrie/cxprojects/SLPAnnotation` (audited strictly read-only; no files modified)
+- **Technology Stack Identified**:
+  - Backend: Python stdlib `http.server.ThreadingHTTPServer` + `BaseHTTPRequestHandler` (zero web framework dependencies like Flask/FastAPI/Django).
+  - Frontend: Vanilla HTML5 Canvas + vanilla ES6 JavaScript + CSS3 flexbox/grid (zero Node.js/npm dependencies).
+  - Persistence: Flat JSON/JSONL with atomic write via temporary file replacement.
+- **Reused Components & Adaptations**:
+  - `Viewport Math & Canvas Zoom`: Reused the pan/zoom transformation equations `[(clientX - left - ox) / scale, (clientY - top - oy) / scale]` ensuring 100% decoupling from canvas scaling.
+  - `Corner Drag Resize & Box Movement`: Reused corner hit testing (`Math.hypot < 10`) and bounding box clamping.
+  - `Mode Separation`: Separated drawing mode (`D` shortcut / button) from box selection/movement to prevent accidental dragging during character sketching.
+  - `Server Pattern`: Adapted `ThreadingHTTPServer` with lightweight JSON endpoints (`/api/session`, `/api/image`, `/api/annotation`, `/api/save`).
 
 ---
 
-## Fixed Generation Parameters
+## Step 2 & 3: MVP Architecture & Frozen Schema
 
-- **Hardware**: NVIDIA GeForce RTX 4090 on `server-zyx` (FP16, translator disabled)
-- **Model Load Time**: 24.03s
-- **Seed**: `2026`
-- **Strength**: `1.0`
-- **DDIM Steps**: `20`
-- **CFG Scale**: `9.0`
-- **Eta**: `0.0`
-- **Mode**: `"edit"`
-- **Sort Priority**: `"↔"`
-- **Revise Position**: `False`
-- **Attention Scale (attnx_scale)**: `1.0`
-- **Font Hollow**: `False`
-- **Prompt (img_prompt)**: `"a Chinese ship license plate"`
-- **Positive Prompt (a_prompt)**: `"a Chinese ship license plate, white text, realistic photo"`
-- **Negative Prompt (n_prompt)**: `"low quality, blurry, noisy"`
+### Components Created
+
+1. **`annotation_app/store.py`**:
+   - Thread-safe `AnnotationStore` protected by `threading.RLock`.
+   - Automatic coordinate clamping to `[0, width]` and `[0, height]` with integer rounding.
+   - Deterministic sorting by `order` and horizontal coordinate `x1`.
+   - Atomic file persistence (`.tmp` write followed by atomic rename).
+
+2. **`annotation_app/server.py`**:
+   - `AnnotationServer` and `AnnotationHandler` running on `http.server.ThreadingHTTPServer`.
+   - Guaranteed extraction of source image dimensions directly from disk images, preventing client display distortion from corrupting storage.
+   - Endpoints:
+     - `GET /`, `/app.js`, `/style.css`: Static web client assets.
+     - `GET /api/session`: Directory file list and annotation progress counter.
+     - `GET /api/image?path=...`: Raw image streaming with proper MIME types.
+     - `GET /api/annotation?path=...`: JSON record retrieval with dimension fallback.
+     - `POST /api/save`: Validated JSONL update endpoint.
+
+3. **`annotation_app/static/` (`index.html`, `app.js`, `style.css`)**:
+   - Dark-theme responsive UI with high-contrast canvas viewport.
+   - Interactive drag-to-draw, corner handle resize (4 corner grips), box drag move, and box deletion.
+   - Real-time character attribute editor (Text, Order, X1, Y1, X2, Y2).
+   - Real-time badge count and ordered character instance list.
+   - Debounced 400ms auto-save status feedback.
+   - Keyboard shortcuts:
+     - `D`: Toggle between Draw Mode and Move/Select Mode.
+     - `Delete` / `Backspace`: Remove selected box.
+     - `PageUp` / `PageDown`: Navigate between images (flushes unsaved changes).
+     - `Esc`: Deselect box.
+     - `Ctrl+S` / `Cmd+S`: Manual save.
+     - `Enter` in text input: Focus next character.
+
+4. **`scripts/run_annotation_tool.py`**:
+   - CLI entry point supporting `--image-dir`, `--annotations`, `--port`, `--host`.
+
+### Frozen Annotation Schema
+
+Canonical JSONL file: `annotations/character_annotations.jsonl`
+
+```json
+{
+  "image": "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg",
+  "width": 239,
+  "height": 57,
+  "instances": [
+    {"bbox": [5, 8, 45, 54], "text": "东", "order": 0},
+    {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1},
+    {"bbox": [125, 7, 139, 51], "text": "1", "order": 2},
+    {"bbox": [158, 7, 183, 56], "text": "6", "order": 3},
+    {"bbox": [204, 7, 229, 52], "text": "8", "order": 4}
+  ]
+}
+```
+
+- **Coordinate Convention**:
+  - `[x1, y1, x2, y2]`
+  - `(x1, y1)`: top-left corner, inclusive integer pixel coordinate (`0 <= x1 < x2 <= width`).
+  - `(x2, y2)`: bottom-right extent, exclusive bounding pixel coordinate (`0 <= y1 < y2 <= height`).
+  - Box width = `x2 - x1`, Box height = `y2 - y1`.
+  - All coordinates are integers clamped strictly to original source image dimensions.
 
 ---
 
-## A/B Experimental Results
+## Step 4: Local-to-Server Synchronization
 
-Output Directory:
-`/mnt/data/zyx/SynSLP/outputs/font_mimic_ab/dongtai168/`
-
-| Condition | Inference Time | Diffusion Output (512x128) | Scaled-Back Output (239x57) |
-| :--- | :---: | :--- | :--- |
-| **A. Baseline** (Mimic Disabled) | 2.74s | `baseline.png` | `baseline_orig_res.png` |
-| **B. Font Mimic** (Mimic Enabled) | 2.20s | `font_mimic.png` | `font_mimic_orig_res.png` |
-
-### Side-by-Side Comparison Grid
-- **Full Resolution (512x488)**: [`outputs/font_mimic_ab/dongtai168/comparison.png`](file:///home/kyrie/cxprojects/SynSLP/outputs/font_mimic_ab/dongtai168/comparison.png)
-- **Original Resolution (239x275)**: [`outputs/font_mimic_ab/dongtai168/comparison_orig_res.png`](file:///home/kyrie/cxprojects/SynSLP/outputs/font_mimic_ab/dongtai168/comparison_orig_res.png)
+- **Script**: `scripts/sync_annotations_to_server.sh`
+- **Target**: `server-zyx:/mnt/data/zyx/SynSLP/annotations/`
+- **Features**:
+  - Explicit user invocation (never automated by web app).
+  - Dry-run preview mode (`--dry-run`).
+  - Only syncs `*.jsonl` annotation artifacts; never touches browser caches, virtualenvs, or unrelated models.
+  - SSH verification of transferred files.
 
 ---
 
-## Human Review Evaluation Prompts
+## Step 5: Acceptance Test Verification Evidence
 
-Per the plan, no auto-scoring is applied. The visual evidence is ready for evaluation against the four criteria:
-1. **Text Consistency**: Is the generated text visually consistent with `苏航268`?
-2. **Style Preservation**: Does Font Mimic preserve the original `东泰168` glyph/font/paint style better than Baseline?
-3. **Redraw Tendency**: Does Font Mimic reduce unnecessary regeneration of the SLP's original visual appearance (e.g. the right-side framed box vs single plate)?
-4. **Naturalness**: Are the Chinese characters and digits more natural and coherent?
+### 1. Automated Acceptance Test (`scripts/acceptance_test_step5.py`)
+
+Executed full 11-step acceptance test on `东泰168` (`239 x 57`):
+- `[Step 1]` Web server started on port 8767.
+- `[Step 2]` Session endpoint verified; image `reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg` loaded.
+- `[Steps 3 & 4]` Created 5 character bounding boxes for `东 / 泰 / 1 / 6 / 8` with orders 0..4.
+- `[Step 5]` Saved via `/api/save`; server confirmed.
+- `[Step 6]` Server completely shut down and restarted to verify persistence across restarts.
+- `[Step 7]` Queried `/api/annotation`: All 5 boxes, text labels, and reading orders restored with 100% exact match:
+  - `东`: Order 0, BBox `[5, 8, 45, 54]`
+  - `泰`: Order 1, BBox `[56, 8, 95, 55]`
+  - `1`: Order 2, BBox `[125, 7, 139, 51]`
+  - `6`: Order 3, BBox `[158, 7, 183, 56]`
+  - `8`: Order 4, BBox `[204, 7, 229, 52]`
+- `[Step 8]` Coordinate boundary check passed: All coordinates integer and within bounds `[239, 57]`.
+- `[Step 9]` Edit and delete/recreate semantics verified: updated box coordinates, deleted box 4, recreated box 4, verified update persistence.
+- `[Step 10]` Finalized canonical JSONL artifact at `annotations/character_annotations.jsonl`.
+- Result: **All 11 steps PASSED**.
+
+### 2. Comprehensive Unit Test Suite (`tests/test_annotation_app.py`)
+
+- Ran 7 tests across `TestAnnotationStore`, `TestAnnotationServer`, and `TestMaskGeneration`.
+- Result: **7/7 PASSED (0.877s)**.
+
+### 3. Downstream Usability: Binary Mask Generation (`scripts/generate_character_masks.py`)
+
+Demonstrated that character annotations directly produce clean binary masks in original image coordinates:
+
+| Target Selection | Matched Boxes | Active Pixels | Total Pixels | Mask Percentage | Output File |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| `1` | 1 | 616 | 13,623 | 4.52% | `outputs/character_masks/mask_1.png` |
+| `泰` | 1 | 1,833 | 13,623 | 13.46% | `outputs/character_masks/mask_泰.png` |
+| `泰168` | 4 | 4,799 | 13,623 | 35.23% | `outputs/character_masks/mask_泰168.png` |
+| `东泰168` | 5 | 6,639 | 13,623 | 48.73% | `outputs/character_masks/mask_东泰168.png` |
+
+### 4. Server Synchronization Evidence
+
+- Executed: `bash scripts/sync_annotations_to_server.sh`
+- Local file: `/home/kyrie/cxprojects/SynSLP/annotations/character_annotations.jsonl` (398 bytes)
+- Server target: `server-zyx:/mnt/data/zyx/SynSLP/annotations/character_annotations.jsonl`
+- Verification on `server-zyx`:
+  ```bash
+  $ ssh server-zyx "cat /mnt/data/zyx/SynSLP/annotations/character_annotations.jsonl"
+  {"image": "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg", "width": 239, "height": 57, "instances": [{"bbox": [5, 8, 45, 54], "text": "东", "order": 0}, {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1}, {"bbox": [125, 7, 139, 51], "text": "1", "order": 2}, {"bbox": [158, 7, 183, 56], "text": "6", "order": 3}, {"bbox": [204, 7, 229, 52], "text": "8", "order": 4}]}
+  ```
+- File contents verified identical.
 
 ---
 
-## Files Changed & Git Consistency
+## Files Created & Changed
 
-- Added entry point: `scripts/run_font_mimic_ab.py`
-- Updated status & logs: `.ai-bridge/agent-status.md`, `.ai-bridge/execution-log.jsonl`
-- Git commit: clean synchronization across Local, GitHub origin/main, and `server-zyx`.
+- `annotation_app/__init__.py`: Package initialization.
+- `annotation_app/store.py`: Thread-safe JSONL storage, coordinate clamping, integer rounding, atomic saving.
+- `annotation_app/server.py`: Lightweight HTTP server with stdlib `ThreadingHTTPServer`.
+- `annotation_app/static/index.html`: Responsive annotation UI layout.
+- `annotation_app/static/style.css`: Clean dark theme styles.
+- `annotation_app/static/app.js`: Canvas viewport, drag-to-draw, handle resize, shortcuts, debounced auto-save.
+- `scripts/run_annotation_tool.py`: CLI launch tool.
+- `scripts/sync_annotations_to_server.sh`: Explicit local-to-server sync utility.
+- `scripts/generate_character_masks.py`: Downstream binary mask generator.
+- `scripts/acceptance_test_step5.py`: End-to-end Step 5 acceptance verification script.
+- `tests/test_annotation_app.py`: Unit and integration test suite.
+- `annotations/character_annotations.jsonl`: Verified ground-truth character annotation record.
+- `README.md`: Documented tool usage, shortcuts, schema, and sync workflows.

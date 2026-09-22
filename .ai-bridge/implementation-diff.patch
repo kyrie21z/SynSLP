@@ -1,326 +1,3163 @@
-diff --git a/scripts/run_font_mimic_ab.py b/scripts/run_font_mimic_ab.py
+diff --git a/.ai-bridge/agent-status.md b/.ai-bridge/agent-status.md
+index 83b3e67..9016b97 100644
+--- a/.ai-bridge/agent-status.md
++++ b/.ai-bridge/agent-status.md
+@@ -1,92 +1,176 @@
+-# Agent Status: AnyText2 Baseline vs Font Mimic A/B Experiment
++# Agent Status: Local Character BBox Annotation Tool
+ 
+-Updated: 2026-09-22T09:20:00.000Z
+-Status: COMPLETED (A/B REVIEW EVIDENCE READY)
++Updated: 2026-09-22T10:45:00.000Z
++Status: COMPLETED (VERIFIED LOCALLY & SYNCHRONIZED TO SERVER)
+ 
+ ## Overview
+-Successfully executed the controlled AnyText2 A/B experiment defined in `.ai-bridge/current-plan.md` on the representative tight-crop SLP (`东泰168` -> `苏航268`):
+-- **Question Tested**: Does AnyText2's native Font Mimic / font-hint conditioning materially improve style preservation when editing the text from `东泰168` to `苏航268`?
+-- **Condition A (Baseline)**: Native AnyText2 edit with `font_hint_image = [None] * 5`, `font_hint_mask = [None] * 5`.
+-- **Condition B (Font Mimic)**: Native AnyText2 edit with `font_hint_image` populated with reference image RGB and `font_hint_mask` populated with user mask.
+-- All other generation parameters (seed, steps, CFG scale, strength=1.0, prompts, resolution policy) strictly held identical between A and B.
+ 
+----
++Successfully implemented and verified the local character-level bounding box annotation tool defined in `.ai-bridge/current-plan.md` ("Build local character bbox annotation tool") by auditing and reusing the architecture and interaction patterns from `/home/kyrie/cxprojects/SLPAnnotation`.
+ 
+-## Fixed Inputs & Paths
++The tool enables annotating:
++1. One rectangular bounding box per visible character/glyph;
++2. Text content of each character;
++3. Sequential reading order.
+ 
+-- **Server**: `server-zyx` (`/mnt/data/zyx/SynSLP`)
+-- **Reference Image**: `/mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg` (`239 x 57`, 3-channel BGR uint8)
+-- **Mask Image**: `/mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png` (`239 x 57`, binary `[0, 255]`, 87.79% editable)
+-- **Target Text**: `"苏航268"`
++All operations run locally with strict coordinate integrity in original image pixel space, debounced auto-save to canonical JSONL, and explicit server synchronization to `server-zyx:/mnt/data/zyx/SynSLP/annotations/`.
+ 
+ ---
+ 
+-## Native Font Mimic API Semantics (Upstream AnyText2 Analysis)
+-
+-Detailed findings from inspecting pinned upstream AnyText2 commit `b06c583a583818f3679665ef67b51363f107853c`:
+-1. **Parameter Definitions**:
+-   - `font_hint_image`: List of length 5 (or matching text line count). Slot 0 accepts a 3-channel RGB `numpy.ndarray` (`(H, W, 3)`, uint8, values 0-255).
+-   - `font_hint_mask`: List of length 5. Slot 0 accepts a single-channel `numpy.ndarray` (`(H, W)` or `(H, W, 1)`, uint8) where pixels > 0 indicate the source text/glyph region to mimic.
+-2. **Internal Processing**:
+-   - In `ms_wrapper.py:197-205`: When `font_hint_image[i]` is not None, `find_polygon` finds the contour of `font_hint_mask[i]`.
+-   - `draw_font_hint((font_hint_image[i]/127.5 - 1), poly)` extracts the localized font patch.
+-   - `crop_image` crops the oriented bounding box patch.
+-   - `ms_wrapper.py` sets `font_paths[i] = 'None'` so the external TTF font renderer is skipped for that line.
+-   - In `cldm/embedding_manager.py:253-264`: The cropped hint patch (`mimic_img`) is passed into the OCR/vision embedding branch as `style_line`, setting `style_flag = 1`.
+-3. **Format Preprocessing for Experiment**:
+-   - In-memory deterministic resolution scaling: Reference image scaled to `(512 x 128 x 3)` via Lanczos4 interpolation; user mask scaled to `(512 x 128 x 1)` via Nearest Neighbor interpolation.
+-   - No erosion, dilation, redrawing, or modification of the user's mask was performed.
+-
+----
++## Step 1: Read-Only Reuse Audit of `SLPAnnotation`
+ 
+-## Fixed Generation Parameters
+-
+-- **Hardware**: NVIDIA GeForce RTX 4090 on `server-zyx` (FP16, translator disabled)
+-- **Model Load Time**: 24.03s
+-- **Seed**: `2026`
+-- **Strength**: `1.0`
+-- **DDIM Steps**: `20`
+-- **CFG Scale**: `9.0`
+-- **Eta**: `0.0`
+-- **Mode**: `"edit"`
+-- **Sort Priority**: `"↔"`
+-- **Revise Position**: `False`
+-- **Attention Scale (attnx_scale)**: `1.0`
+-- **Font Hollow**: `False`
+-- **Prompt (img_prompt)**: `"a Chinese ship license plate"`
+-- **Positive Prompt (a_prompt)**: `"a Chinese ship license plate, white text, realistic photo"`
+-- **Negative Prompt (n_prompt)**: `"low quality, blurry, noisy"`
++- **Source Path**: `/home/kyrie/cxprojects/SLPAnnotation` (audited strictly read-only; no files modified)
++- **Technology Stack Identified**:
++  - Backend: Python stdlib `http.server.ThreadingHTTPServer` + `BaseHTTPRequestHandler` (zero web framework dependencies like Flask/FastAPI/Django).
++  - Frontend: Vanilla HTML5 Canvas + vanilla ES6 JavaScript + CSS3 flexbox/grid (zero Node.js/npm dependencies).
++  - Persistence: Flat JSON/JSONL with atomic write via temporary file replacement.
++- **Reused Components & Adaptations**:
++  - `Viewport Math & Canvas Zoom`: Reused the pan/zoom transformation equations `[(clientX - left - ox) / scale, (clientY - top - oy) / scale]` ensuring 100% decoupling from canvas scaling.
++  - `Corner Drag Resize & Box Movement`: Reused corner hit testing (`Math.hypot < 10`) and bounding box clamping.
++  - `Mode Separation`: Separated drawing mode (`D` shortcut / button) from box selection/movement to prevent accidental dragging during character sketching.
++  - `Server Pattern`: Adapted `ThreadingHTTPServer` with lightweight JSON endpoints (`/api/session`, `/api/image`, `/api/annotation`, `/api/save`).
+ 
+ ---
+ 
+-## A/B Experimental Results
++## Step 2 & 3: MVP Architecture & Frozen Schema
++
++### Components Created
++
++1. **`annotation_app/store.py`**:
++   - Thread-safe `AnnotationStore` protected by `threading.RLock`.
++   - Automatic coordinate clamping to `[0, width]` and `[0, height]` with integer rounding.
++   - Deterministic sorting by `order` and horizontal coordinate `x1`.
++   - Atomic file persistence (`.tmp` write followed by atomic rename).
++
++2. **`annotation_app/server.py`**:
++   - `AnnotationServer` and `AnnotationHandler` running on `http.server.ThreadingHTTPServer`.
++   - Guaranteed extraction of source image dimensions directly from disk images, preventing client display distortion from corrupting storage.
++   - Endpoints:
++     - `GET /`, `/app.js`, `/style.css`: Static web client assets.
++     - `GET /api/session`: Directory file list and annotation progress counter.
++     - `GET /api/image?path=...`: Raw image streaming with proper MIME types.
++     - `GET /api/annotation?path=...`: JSON record retrieval with dimension fallback.
++     - `POST /api/save`: Validated JSONL update endpoint.
++
++3. **`annotation_app/static/` (`index.html`, `app.js`, `style.css`)**:
++   - Dark-theme responsive UI with high-contrast canvas viewport.
++   - Interactive drag-to-draw, corner handle resize (4 corner grips), box drag move, and box deletion.
++   - Real-time character attribute editor (Text, Order, X1, Y1, X2, Y2).
++   - Real-time badge count and ordered character instance list.
++   - Debounced 400ms auto-save status feedback.
++   - Keyboard shortcuts:
++     - `D`: Toggle between Draw Mode and Move/Select Mode.
++     - `Delete` / `Backspace`: Remove selected box.
++     - `PageUp` / `PageDown`: Navigate between images (flushes unsaved changes).
++     - `Esc`: Deselect box.
++     - `Ctrl+S` / `Cmd+S`: Manual save.
++     - `Enter` in text input: Focus next character.
++
++4. **`scripts/run_annotation_tool.py`**:
++   - CLI entry point supporting `--image-dir`, `--annotations`, `--port`, `--host`.
++
++### Frozen Annotation Schema
++
++Canonical JSONL file: `annotations/character_annotations.jsonl`
++
++```json
++{
++  "image": "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg",
++  "width": 239,
++  "height": 57,
++  "instances": [
++    {"bbox": [5, 8, 45, 54], "text": "东", "order": 0},
++    {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1},
++    {"bbox": [125, 7, 139, 51], "text": "1", "order": 2},
++    {"bbox": [158, 7, 183, 56], "text": "6", "order": 3},
++    {"bbox": [204, 7, 229, 52], "text": "8", "order": 4}
++  ]
++}
++```
++
++- **Coordinate Convention**:
++  - `[x1, y1, x2, y2]`
++  - `(x1, y1)`: top-left corner, inclusive integer pixel coordinate (`0 <= x1 < x2 <= width`).
++  - `(x2, y2)`: bottom-right extent, exclusive bounding pixel coordinate (`0 <= y1 < y2 <= height`).
++  - Box width = `x2 - x1`, Box height = `y2 - y1`.
++  - All coordinates are integers clamped strictly to original source image dimensions.
+ 
+-Output Directory:
+-`/mnt/data/zyx/SynSLP/outputs/font_mimic_ab/dongtai168/`
++---
+ 
+-| Condition | Inference Time | Diffusion Output (512x128) | Scaled-Back Output (239x57) |
+-| :--- | :---: | :--- | :--- |
+-| **A. Baseline** (Mimic Disabled) | 2.74s | `baseline.png` | `baseline_orig_res.png` |
+-| **B. Font Mimic** (Mimic Enabled) | 2.20s | `font_mimic.png` | `font_mimic_orig_res.png` |
++## Step 4: Local-to-Server Synchronization
+ 
+-### Side-by-Side Comparison Grid
+-- **Full Resolution (512x488)**: [`outputs/font_mimic_ab/dongtai168/comparison.png`](file:///home/kyrie/cxprojects/SynSLP/outputs/font_mimic_ab/dongtai168/comparison.png)
+-- **Original Resolution (239x275)**: [`outputs/font_mimic_ab/dongtai168/comparison_orig_res.png`](file:///home/kyrie/cxprojects/SynSLP/outputs/font_mimic_ab/dongtai168/comparison_orig_res.png)
++- **Script**: `scripts/sync_annotations_to_server.sh`
++- **Target**: `server-zyx:/mnt/data/zyx/SynSLP/annotations/`
++- **Features**:
++  - Explicit user invocation (never automated by web app).
++  - Dry-run preview mode (`--dry-run`).
++  - Only syncs `*.jsonl` annotation artifacts; never touches browser caches, virtualenvs, or unrelated models.
++  - SSH verification of transferred files.
+ 
+ ---
+ 
+-## Human Review Evaluation Prompts
+-
+-Per the plan, no auto-scoring is applied. The visual evidence is ready for evaluation against the four criteria:
+-1. **Text Consistency**: Is the generated text visually consistent with `苏航268`?
+-2. **Style Preservation**: Does Font Mimic preserve the original `东泰168` glyph/font/paint style better than Baseline?
+-3. **Redraw Tendency**: Does Font Mimic reduce unnecessary regeneration of the SLP's original visual appearance (e.g. the right-side framed box vs single plate)?
+-4. **Naturalness**: Are the Chinese characters and digits more natural and coherent?
++## Step 5: Acceptance Test Verification Evidence
++
++### 1. Automated Acceptance Test (`scripts/acceptance_test_step5.py`)
++
++Executed full 11-step acceptance test on `东泰168` (`239 x 57`):
++- `[Step 1]` Web server started on port 8767.
++- `[Step 2]` Session endpoint verified; image `reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg` loaded.
++- `[Steps 3 & 4]` Created 5 character bounding boxes for `东 / 泰 / 1 / 6 / 8` with orders 0..4.
++- `[Step 5]` Saved via `/api/save`; server confirmed.
++- `[Step 6]` Server completely shut down and restarted to verify persistence across restarts.
++- `[Step 7]` Queried `/api/annotation`: All 5 boxes, text labels, and reading orders restored with 100% exact match:
++  - `东`: Order 0, BBox `[5, 8, 45, 54]`
++  - `泰`: Order 1, BBox `[56, 8, 95, 55]`
++  - `1`: Order 2, BBox `[125, 7, 139, 51]`
++  - `6`: Order 3, BBox `[158, 7, 183, 56]`
++  - `8`: Order 4, BBox `[204, 7, 229, 52]`
++- `[Step 8]` Coordinate boundary check passed: All coordinates integer and within bounds `[239, 57]`.
++- `[Step 9]` Edit and delete/recreate semantics verified: updated box coordinates, deleted box 4, recreated box 4, verified update persistence.
++- `[Step 10]` Finalized canonical JSONL artifact at `annotations/character_annotations.jsonl`.
++- Result: **All 11 steps PASSED**.
++
++### 2. Comprehensive Unit Test Suite (`tests/test_annotation_app.py`)
++
++- Ran 7 tests across `TestAnnotationStore`, `TestAnnotationServer`, and `TestMaskGeneration`.
++- Result: **7/7 PASSED (0.877s)**.
++
++### 3. Downstream Usability: Binary Mask Generation (`scripts/generate_character_masks.py`)
++
++Demonstrated that character annotations directly produce clean binary masks in original image coordinates:
++
++| Target Selection | Matched Boxes | Active Pixels | Total Pixels | Mask Percentage | Output File |
++| :--- | :---: | :---: | :---: | :---: | :--- |
++| `1` | 1 | 616 | 13,623 | 4.52% | `outputs/character_masks/mask_1.png` |
++| `泰` | 1 | 1,833 | 13,623 | 13.46% | `outputs/character_masks/mask_泰.png` |
++| `泰168` | 4 | 4,799 | 13,623 | 35.23% | `outputs/character_masks/mask_泰168.png` |
++| `东泰168` | 5 | 6,639 | 13,623 | 48.73% | `outputs/character_masks/mask_东泰168.png` |
++
++### 4. Server Synchronization Evidence
++
++- Executed: `bash scripts/sync_annotations_to_server.sh`
++- Local file: `/home/kyrie/cxprojects/SynSLP/annotations/character_annotations.jsonl` (398 bytes)
++- Server target: `server-zyx:/mnt/data/zyx/SynSLP/annotations/character_annotations.jsonl`
++- Verification on `server-zyx`:
++  ```bash
++  $ ssh server-zyx "cat /mnt/data/zyx/SynSLP/annotations/character_annotations.jsonl"
++  {"image": "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg", "width": 239, "height": 57, "instances": [{"bbox": [5, 8, 45, 54], "text": "东", "order": 0}, {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1}, {"bbox": [125, 7, 139, 51], "text": "1", "order": 2}, {"bbox": [158, 7, 183, 56], "text": "6", "order": 3}, {"bbox": [204, 7, 229, 52], "text": "8", "order": 4}]}
++  ```
++- File contents verified identical.
+ 
+ ---
+ 
+-## Files Changed & Git Consistency
+-
+-- Added entry point: `scripts/run_font_mimic_ab.py`
+-- Updated status & logs: `.ai-bridge/agent-status.md`, `.ai-bridge/execution-log.jsonl`
+-- Git commit: clean synchronization across Local, GitHub origin/main, and `server-zyx`.
++## Files Created & Changed
++
++- `annotation_app/__init__.py`: Package initialization.
++- `annotation_app/store.py`: Thread-safe JSONL storage, coordinate clamping, integer rounding, atomic saving.
++- `annotation_app/server.py`: Lightweight HTTP server with stdlib `ThreadingHTTPServer`.
++- `annotation_app/static/index.html`: Responsive annotation UI layout.
++- `annotation_app/static/style.css`: Clean dark theme styles.
++- `annotation_app/static/app.js`: Canvas viewport, drag-to-draw, handle resize, shortcuts, debounced auto-save.
++- `scripts/run_annotation_tool.py`: CLI launch tool.
++- `scripts/sync_annotations_to_server.sh`: Explicit local-to-server sync utility.
++- `scripts/generate_character_masks.py`: Downstream binary mask generator.
++- `scripts/acceptance_test_step5.py`: End-to-end Step 5 acceptance verification script.
++- `tests/test_annotation_app.py`: Unit and integration test suite.
++- `annotations/character_annotations.jsonl`: Verified ground-truth character annotation record.
++- `README.md`: Documented tool usage, shortcuts, schema, and sync workflows.
+diff --git a/.ai-bridge/current-plan.md b/.ai-bridge/current-plan.md
+index ca907c6..f01541c 100644
+--- a/.ai-bridge/current-plan.md
++++ b/.ai-bridge/current-plan.md
+@@ -1,6 +1,6 @@
+-# Compare AnyText2 baseline vs Font Mimic
++# Build local character bbox annotation tool
+ 
+-Updated: 2026-09-22T09:15:52.223Z
++Updated: 2026-09-22T10:29:54.033Z
+ Workspace: /home/kyrie/cxprojects/SynSLP
+ Target agent: Codex (codex)
+ 
+@@ -8,174 +8,235 @@ Target agent: Codex (codex)
+ 
+ # Goal
+ 
+-Run exactly one controlled AnyText2 A/B experiment on the representative tight-crop SLP `东泰168` to answer one question:
++Build the minimum sufficient **local web annotation tool** for SynSLP character-level annotations by reusing as much code as practical from the existing local project:
+ 
+-> Does AnyText2's native Font Mimic / font-hint conditioning materially improve style preservation when editing the text from `东泰168` to `苏航268`?
++`/home/kyrie/cxprojects/SLPAnnotation`
+ 
+-This is NOT a strength sweep and NOT a synthetic-data pipeline task.
++The tool is for annotating:
++- one bounding box per visible character/glyph;
++- the text inside each box;
++- character reading order.
+ 
+-The previous strength experiment is complete. Its key engineering finding is that the current `strength` parameter is a Control/WriteNet conditioning scale, not an img2img denoising-strength control. Therefore do not sweep or reinterpret `strength` again. Fix it at `1.0`.
++Annotation is performed **locally**. The resulting annotation artifact is saved locally first, then explicitly synchronized to `server-zyx` as a separate step.
+ 
+-The current manually supplied edit mask covers about 87.79% of the tight SLP crop. Standard AnyText2 edit therefore has very little unmasked SLP content available as a preservation anchor inside the crop. The purpose of this experiment is only to test whether the model's existing native font/style hint path can recover useful reference style under this exact setup.
++Do not couple annotation UI, AnyText2 inference, GPU/server execution, mask generation, or synthetic-data generation.
+ 
+-## Fixed inputs
++# First-principles constraints
+ 
+-Server:
+-- host: `server-zyx`
+-- repo: `/mnt/data/zyx/SynSLP`
++The annotation artifact must preserve only source-of-truth human labels:
++
++[
++	ext{image} + 	ext{original-pixel bbox} + 	ext{character text} + 	ext{order}
++]
++
++Do NOT store derived AnyText2 artifacts such as:
++- edit masks;
++- font-hint masks;
++- padded/dilated boxes;
++- 512x512 coordinates;
++- letterbox coordinates;
++- generated images.
+ 
+-Reference image:
+-- `/mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg`
++Those must be derived later from the raw annotations so mask policies can change without re-annotation.
+ 
+-User-provided mask:
+-- `/mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png`
++All bbox coordinates must be saved in **original image pixel coordinates**, independent of browser zoom/display size.
+ 
+-Target text:
+-- exactly `苏航268`
++# Step 1 — Read-only reuse audit of SLPAnnotation
+ 
+-Generator:
+-- existing verified AnyText2 deployment
+-- keep the currently pinned AnyText2 revision, checkpoint, FP16 environment, compatibility patch, and translator-disabled configuration unchanged
++Before writing implementation code, inspect `/home/kyrie/cxprojects/SLPAnnotation` read-only.
+ 
+-Fixed generation parameters:
+-- mode: `edit`
+-- seed: `2026`
+-- strength: `1.0`
+-- DDIM steps: `20`
+-- CFG scale: `9.0`
+-- eta: `0.0`
+-- sort priority: `↔`
+-- revise_pos: `False`
+-- attnx_scale: `1.0`
+-- font_hollow: `False`
+-- img_prompt: current `a Chinese ship license plate`
+-- a_prompt: current neutral prompt `a Chinese ship license plate, white text, realistic photo`
+-- n_prompt: current `low quality, blurry, noisy`
+-- text_colors: leave unchanged from the working path
+-- resolution policy: use the same deterministic `239x57 -> 512x128` in-memory scaling already verified by the strength-tuning script, with the same interpolation choices
++Identify the exact existing technology stack and reusable modules for:
++1. image loading/navigation;
++2. canvas/image rendering and bbox drawing;
++3. bbox selection/move/resize/delete interactions;
++4. text/label editing;
++5. annotation persistence/loading;
++6. keyboard shortcuts and progress state;
++7. any existing backend routes or local file APIs.
+ 
+-Do not change any of these between A and B.
++Record in `.ai-bridge/agent-status.md`:
++- framework(s) and entry points;
++- files/modules worth reusing;
++- whether reuse should be direct copy, small adaptation, or not reused;
++- any license/config/runtime constraints;
++- the smallest implementation path for SynSLP.
+ 
+-## Step 1 — Verify the exact native Font Mimic interface
++Hard rules:
++- do not modify `SLPAnnotation`;
++- do not redesign from scratch before completing this audit;
++- if `SLPAnnotation` is inaccessible from the executor environment, stop and report the blocker rather than inventing its structure.
+ 
+-Before implementing the comparison, inspect only the pinned AnyText2 code actually used by the working deployment and determine the exact runtime semantics of:
+-- `font_hint_image`
+-- `font_hint_mask`
+-- their list length / per-text-line indexing
+-- accepted image/mask shape, dtype, value range, color order, and resolution
+-- whether the hint mask is interpreted as text/reference region and how it is resized internally
++# Step 2 — Implement the smallest local annotation MVP in SynSLP
+ 
+-Do not guess these details and do not redesign AnyText2.
++Implement inside the SynSLP repository, following the audited SLPAnnotation stack/conventions where practical.
+ 
+-Record the relevant upstream file/function names and the conclusion in `.ai-bridge/agent-status.md`.
++The MVP must support exactly these operations:
+ 
+-Hard constraint:
+-- Use the user's existing reference image as the source of the font/style hint.
+-- Use the user's existing mask as the source of the font-hint region if it is compatible with the native API.
+-- If the native API requires only deterministic format adaptation (resize, channel conversion, dtype/range conversion), do that in memory and record it.
+-- Do NOT manually redraw, shrink, expand, erode, dilate, blur, or otherwise invent a new mask.
+-- If the supplied mask is fundamentally incompatible with Font Mimic semantics, stop and report that exact incompatibility instead of silently substituting another mask.
++1. **Image navigation**
++   - load images from a configurable local image directory;
++   - next / previous image;
++   - show current index and total count;
++   - preserve current annotation when navigating.
+ 
+-## Step 2 — Implement the smallest A/B entry point
++2. **Bounding-box annotation**
++   - drag to create a rectangular bbox;
++   - select an existing bbox;
++   - move and resize it;
++   - delete it;
++   - display each box's text label visibly.
+ 
+-Prefer minimally modifying or reusing the existing single-image tuning code. Do not create a general pipeline or new package architecture.
++3. **Text + order**
++   - every bbox stores its text;
++   - intended use is one character/glyph per box;
++   - assign deterministic reading order;
++   - allow correcting text and order after creation.
+ 
+-Run two conditions from the same model load and with identical fixed inputs/parameters:
++4. **Persistence**
++   - auto-save locally after meaningful edits;
++   - reload annotations exactly after browser refresh/restart;
++   - no database unless the reused SLPAnnotation implementation already uses one and reuse is materially simpler than file persistence.
+ 
+-### A. Baseline
+-Native AnyText2 edit with Font Mimic disabled:
+-- `font_hint_image = [None] * 5`
+-- `font_hint_mask = [None] * 5`
++5. **Coordinate correctness**
++   - browser/display coordinates are converted back to original image pixel coordinates before persistence;
++   - zoom/responsive display must not change saved annotations.
+ 
+-### B. Font Mimic
+-Native AnyText2 edit with Font Mimic enabled for the single target text entry:
+-- populate the correct first/active font-hint slot using the reference image
+-- populate the corresponding font-hint mask slot using the user mask
+-- leave unused slots exactly as required by the native API
++Do not add authentication, multi-user collaboration, cloud storage, task assignment, review workflows, OCR-assisted labeling, model inference, or UI theming.
+ 
+-Do not alter `glyline_font_path`, prompt wording, target text, seed, edit mask, strength, resolution, or any other parameter merely to make B look better.
++# Step 3 — Freeze a simple annotation schema
+ 
+-Both A and B must be generated fresh under the same current code/config; do not use an old strength-sweep image as the baseline unless you first prove it is produced with byte-identical effective parameters. Fresh A/B generation is preferred.
++Use one canonical local artifact, preferably JSONL unless the reused application has an equally simple established format.
+ 
+-## Step 3 — Run exactly the two conditions
++Each image record must contain at least:
+ 
+-Write outputs under a dedicated directory, for example:
++```json
++{
++  "image": "relative/or/stable/image/path.jpg",
++  "width": 239,
++  "height": 57,
++  "instances": [
++    {
++      "bbox": [12, 8, 43, 50],
++      "text": "东",
++      "order": 0
++    }
++  ]
++}
++```
++
++Requirements:
++- bbox convention must be explicitly documented, e.g. `[x1, y1, x2, y2]`;
++- define whether `x2/y2` are inclusive or exclusive and keep it consistent;
++- coordinates are integers in original image pixels;
++- reject/clamp boxes outside image bounds deterministically;
++- no duplicate hidden coordinate system;
++- stable ordering when records are rewritten.
++
++If the reused SLPAnnotation format differs, add a thin export/conversion layer rather than forcing a large rewrite.
++
++# Step 4 — Add explicit local-to-server sync as a separate utility
++
++Only after the local MVP works, add the smallest explicit sync mechanism for annotation artifacts.
+ 
+-`/mnt/data/zyx/SynSLP/outputs/font_mimic_ab/dongtai168/`
++Target:
++- host: `server-zyx`
++- repo: `/mnt/data/zyx/SynSLP`
+ 
+-Required artifacts:
+-- `reference.png` or an exact review copy of the reference
+-- `mask.png` or an exact review copy of the mask
+-- `baseline.png` — diffusion-resolution A output
+-- `font_mimic.png` — diffusion-resolution B output
+-- `baseline_orig_res.png` — A scaled back to 239x57
+-- `font_mimic_orig_res.png` — B scaled back to 239x57
+-- `comparison.png` — labeled visual comparison containing at minimum:
+-  1. Reference: 东泰168
+-  2. Baseline: 苏航268
+-  3. Font Mimic: 苏航268
++Requirements:
++- synchronization is invoked explicitly by the user, not automatically by the web app;
++- sync only annotation artifacts/config needed by downstream processing;
++- do not sync browser caches, local environment files, source images unless explicitly required;
++- never overwrite unrelated server data;
++- use an existing safe project sync convention if one already exists; otherwise a small documented `rsync/scp` helper is sufficient;
++- include a dry-run or clear destination echo before transfer if practical.
+ 
+-Keep the comparison rendering itself lossless and do not apply enhancement or post-processing.
++Do not trigger AnyText2 after sync.
+ 
+-Record inference time and warnings/errors for both conditions.
++# Step 5 — Acceptance test on 东泰168
+ 
+-## Step 4 — Produce review evidence and stop
++Use the existing local reference image if present:
+ 
+-Update `.ai-bridge/agent-status.md` with:
+-- exact reference and mask paths
+-- target text
+-- exact fixed generation parameters
+-- exact Font Mimic API semantics found in pinned upstream code
+-- exact preprocessing applied to reference/mask for the font-hint path
+-- A and B output paths
+-- inference time for A and B
+-- any warnings/errors
+-- files changed and verification performed
++`reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg`
+ 
+-Do NOT auto-score, OCR-filter, or declare a winner.
++If that exact local path is unavailable, use one representative local SLP image and record the substitution.
+ 
+-The human review will judge only:
+-1. Is the generated text actually visually consistent with `苏航268`?
+-2. Does Font Mimic preserve the original `东泰168` glyph/font/paint style better than Baseline?
+-3. Does it reduce unnecessary regeneration of the SLP's original visual appearance?
+-4. Are the Chinese characters and digits more natural and coherent?
++Human/MVP acceptance flow:
+ 
+-## Decision boundary
++1. start the local web app;
++2. open the image;
++3. create five boxes for `东 / 泰 / 1 / 6 / 8`;
++4. assign corresponding text and reading order;
++5. save/autosave;
++6. refresh/restart;
++7. verify all five boxes, text labels, and order restore exactly;
++8. verify persisted coordinates map to the original image dimensions;
++9. edit one box and delete/recreate one box to verify update semantics;
++10. export/finalize the annotation artifact;
++11. run the explicit sync utility to the server destination and verify the artifact exists there unchanged.
+ 
+-This experiment must not make the downstream decision automatically, but its purpose is to supply evidence for this binary choice:
++Record exact commands, output paths, annotation file path, and verification evidence in `.ai-bridge/agent-status.md`.
+ 
+-- If Font Mimic gives a clear qualitative improvement, continue refining the AnyText2 SLP editing formulation.
+-- If Font Mimic still substantially redraws the whole tight-crop plate or fails to preserve useful style, treat that as evidence that standard AnyText2 editing is poorly matched to this tight-crop SLP use case; stop brute-force parameter tuning before considering another reference-preserving editing approach.
++# Optional but valuable focused test
+ 
+-## Stop condition
++If it is trivial after the MVP is working, add one small deterministic utility/test that converts selected annotated bboxes into a binary mask in original image coordinates, solely to prove the annotation schema is downstream-usable.
+ 
+-Stop immediately after the two fresh outputs and the review comparison/evidence are produced.
++For `东泰168`, demonstrate that selecting:
++- `1`;
++- `泰`;
++- `泰168`;
++- `东泰168`;
+ 
+-Out of scope:
+-- any additional strength values
+-- seed sweep
+-- prompt sweep
+-- mask redesign
+-- new reference images
+-- new target strings
+-- multiple samples
+-- OCR verification/filtering
+-- automatic image-quality metrics
+-- batch generation
+-- manifest generation
+-- synthetic-data pipeline
+-- Qwen comparison
+-- model training/fine-tuning
+-- AnyText2 architecture modification
+-- downstream SLPR training
++produces masks aligned to the annotated boxes.
+ 
+-## Implementation contract
++This utility must remain separate from the annotation web app and must not introduce AnyText2 inference.
+ 
+-- Keep edits minimal and reviewable.
+-- Treat the pinned AnyText2 implementation as the source of truth for Font Mimic semantics.
+-- Do not modify third-party AnyText2 architecture to force this experiment to work.
+-- Run only focused verification required for this A/B.
+-- Update `.ai-bridge/agent-status.md` with the final evidence.
++Skip this if it materially expands scope.
++
++# Expected repository shape
++
++Prefer the structure already used by the reused SLPAnnotation code. If no natural structure exists, keep additions minimal, for example:
++
++```text
++SynSLP/
++├── annotation_app/          # only if needed by reused stack
++├── annotations/             # gitignore generated local annotation data if appropriate
++├── scripts/
++│   └── sync_annotations_to_server.sh
++└── docs/ or README section  # minimal run/use instructions
++```
++
++Do not create a complex package hierarchy without evidence that the reused code requires it.
++
++# Stop conditions
++
++Stop when:
++- the local bbox+text annotation MVP works;
++- refresh/restart persistence is verified;
++- original-pixel coordinates are verified;
++- the annotation artifact is explicitly synchronized to server successfully;
++- evidence is recorded.
++
++Out of scope:
++- AnyText2 generation;
++- edit-mask policy tuning;
++- font-hint-mask policy tuning;
++- 512x512 letterboxing;
++- OCR auto-labeling;
++- automatic character segmentation;
++- batch synthetic generation;
++- dataset filtering;
++- downstream SLPR training;
++- annotation platform user accounts;
++- multi-annotator review/QA;
++- production deployment.
++
++# Implementation contract
++
++- Reuse before rewriting.
++- Keep `SLPAnnotation` read-only.
++- Work in small, reviewable steps.
++- Do not silently change the agreed annotation schema or coordinate convention.
++- Run focused verification.
++- Update `.ai-bridge/agent-status.md` with files reused/copied, files created/changed, commands, checks, results, blockers, and exact annotation/sync artifact paths.
+ - Save the final review diff to `.ai-bridge/implementation-diff.patch` when practical.
+ - Append notable execution events to `.ai-bridge/execution-log.jsonl` when supported.
+ 
+diff --git a/.ai-bridge/execution-log.jsonl b/.ai-bridge/execution-log.jsonl
+index 8da0f31..c49ea73 100644
+--- a/.ai-bridge/execution-log.jsonl
++++ b/.ai-bridge/execution-log.jsonl
+@@ -16,3 +16,10 @@
+ {"ts":"2026-09-22T09:15:52.232Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Compare AnyText2 baseline vs Font Mimic","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
+ {"ts":"2026-09-22T09:17:30.000Z","event":"font_mimic_api_verified","method":"draw_font_hint+crop_image+embedding_manager","verdict":"PASS"}
+ {"ts":"2026-09-22T09:18:59.000Z","event":"ab_experiment_completed","output_dir":"/mnt/data/zyx/SynSLP/outputs/font_mimic_ab/dongtai168","verdict":"PASS"}
++{"ts":"2026-09-22T10:29:54.042Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Build local character bbox annotation tool","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
++{"ts":"2026-09-22T10:35:00.000Z","event":"step1_slpannotation_audit_completed","source":"/home/kyrie/cxprojects/SLPAnnotation","verdict":"PASS"}
++{"ts":"2026-09-22T10:40:00.000Z","event":"step2_annotation_mvp_implemented","components":["store","server","static_ui"],"verdict":"PASS"}
++{"ts":"2026-09-22T10:41:00.000Z","event":"step3_schema_frozen","format":"jsonl","artifact":"annotations/character_annotations.jsonl","verdict":"PASS"}
++{"ts":"2026-09-22T10:42:00.000Z","event":"step4_server_sync_utility_verified","target":"server-zyx:/mnt/data/zyx/SynSLP/annotations","verdict":"PASS"}
++{"ts":"2026-09-22T10:44:00.000Z","event":"step5_acceptance_test_passed","target_image":"reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg","instances":5,"masks_generated":4,"verdict":"ALL_PASS"}
++
+diff --git a/.ai-bridge/session-log.jsonl b/.ai-bridge/session-log.jsonl
+index 400a598..2d02642 100644
+--- a/.ai-bridge/session-log.jsonl
++++ b/.ai-bridge/session-log.jsonl
+@@ -2,3 +2,4 @@
+ {"ts":"2026-09-22T06:07:46.172Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Close AnyText2 deployment reproducibility gaps","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
+ {"ts":"2026-09-22T08:31:41.560Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Tune one AnyText2 SLP edit","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
+ {"ts":"2026-09-22T09:15:52.231Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Compare AnyText2 baseline vs Font Mimic","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
++{"ts":"2026-09-22T10:29:54.041Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Build local character bbox annotation tool","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
+diff --git a/README.md b/README.md
+index df59958..8833173 100644
+--- a/README.md
++++ b/README.md
+@@ -42,6 +42,81 @@ To enable the translator:
+ USE_TRANSLATOR=1 bash scripts/run_anytext2_demo.sh
+ ```
+ 
++## Character-Level BBox Annotation Tool
++
++Lightweight, dependency-free local web tool for annotating character bounding boxes, labels, and reading order on SLP images. Reuses patterns from `SLPAnnotation` with zero npm/build steps and stdlib Python backend.
++
++### 1. Launch the Annotation Web App
++
++```bash
++python scripts/run_annotation_tool.py --image-dir reference/ --port 8767
++```
++
++Access the UI in your browser at `http://127.0.0.1:8767`.
++
++### 2. Interaction & Shortcuts
++
++- **Left Drag**: Draw a new rectangular character bounding box (in original image pixel space).
++- **Corner Handles**: Drag any of the 4 corner handles of the selected box to resize.
++- **Move Box**: Toggle to Select/Move mode (`D`), then drag inside the box to reposition.
++- **D**: Toggle between *Draw Mode* and *Select/Move Mode*.
++- **Delete / Backspace**: Delete the currently selected character box.
++- **PageUp / PageDown**: Navigate to previous / next image (flushes pending saves).
++- **Auto-Save**: Changes debounced and saved to JSONL automatically after 400ms (or `Ctrl+S` / `Cmd+S` for manual save).
++
++### 3. Annotation Schema & Coordinates
++
++Saved in `annotations/character_annotations.jsonl` (one JSON record per image):
++
++```json
++{
++  "image": "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg",
++  "width": 239,
++  "height": 57,
++  "instances": [
++    {"bbox": [5, 8, 45, 54], "text": "东", "order": 0},
++    {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1},
++    {"bbox": [125, 7, 139, 51], "text": "1", "order": 2},
++    {"bbox": [158, 7, 183, 56], "text": "6", "order": 3},
++    {"bbox": [204, 7, 229, 52], "text": "8", "order": 4}
++  ]
++}
++```
++
++- **Coordinates**: `[x1, y1, x2, y2]` where `(x1, y1)` is the top-left coordinate (inclusive) and `(x2, y2)` is the bottom-right extent (exclusive, width = `x2 - x1`, height = `y2 - y1`).
++- All coordinates are strictly integers in original image space, unaffected by canvas zoom or screen scaling.
++
++### 4. Downstream Mask Generator
++
++Generate binary edit masks from character annotations for selected characters or sequences:
++
++```bash
++python scripts/generate_character_masks.py \
++  --annotations annotations/character_annotations.jsonl \
++  --image "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg" \
++  --select "1" "泰" "泰168" "东泰168"
++```
++
++### 5. Synchronize Annotations to Server
++
++Explicit local-to-server synchronization utility:
++
++```bash
++# Dry run preview
++bash scripts/sync_annotations_to_server.sh --dry-run
++
++# Execute sync to server-zyx:/mnt/data/zyx/SynSLP/annotations/
++bash scripts/sync_annotations_to_server.sh
++```
++
++### 6. Run Tests
++
++```bash
++python -m unittest tests/test_annotation_app.py
++python scripts/acceptance_test_step5.py
++```
++
+ ## Repository policy
+ 
+ Large model weights, the upstream AnyText2 repository, generated images, and local caches are intentionally excluded from Git.
++
+diff --git a/annotation_app/__init__.py b/annotation_app/__init__.py
 new file mode 100644
-index 0000000..cc30065
+index 0000000..450a499
 --- /dev/null
-+++ b/scripts/run_font_mimic_ab.py
-@@ -0,0 +1,320 @@
++++ b/annotation_app/__init__.py
+@@ -0,0 +1 @@
++"""SynSLP local character annotation tool package."""
+diff --git a/annotation_app/server.py b/annotation_app/server.py
+new file mode 100644
+index 0000000..2243a82
+--- /dev/null
++++ b/annotation_app/server.py
+@@ -0,0 +1,193 @@
++"""
++Local HTTP Server for SynSLP character-level bbox annotation.
++Reuses lightweight stdlib ThreadingHTTPServer pattern from SLPAnnotation.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import mimetypes
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++from pathlib import Path
++from urllib.parse import parse_qs, urlsplit
++from PIL import Image
++
++from annotation_app.store import AnnotationStore
++
++STATIC_DIR = Path(__file__).resolve().parent / "static"
++SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
++
++
++class AnnotationServer(ThreadingHTTPServer):
++    daemon_threads = False
++
++    def __init__(
++        self,
++        image_dir: Path,
++        jsonl_path: Path,
++        host: str = "127.0.0.1",
++        port: int = 8767,
++    ):
++        self.image_dir = Path(image_dir).resolve()
++        self.jsonl_path = Path(jsonl_path).resolve()
++        self.store = AnnotationStore(self.jsonl_path)
++        self.images = self._scan_images()
++        super().__init__((host, port), AnnotationHandler)
++
++    def _scan_images(self) -> list[dict]:
++        if not self.image_dir.exists():
++            return []
++        files = []
++        for path in sorted(self.image_dir.rglob("*")):
++            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTS:
++                rel_path = path.relative_to(self.image_dir.parent).as_posix()
++                record = self.store.get(rel_path)
++                has_ann = record is not None and len(record.get("instances", [])) > 0
++                files.append(
++                    {
++                        "path": rel_path,
++                        "abs_path": str(path),
++                        "filename": path.name,
++                        "annotated": has_ann,
++                        "instance_count": len(record.get("instances", [])) if record else 0,
++                    }
++                )
++        return files
++
++    def refresh_image_list(self):
++        self.images = self._scan_images()
++
++
++class AnnotationHandler(BaseHTTPRequestHandler):
++    def setup(self):
++        super().setup()
++        self.connection.settimeout(15)
++
++    def log_message(self, format, *args):
++        pass
++
++    def send_data(
++        self,
++        status: int,
++        data: bytes,
++        content_type: str = "application/json; charset=utf-8",
++    ):
++        self.send_response(status)
++        self.send_header("Content-Type", content_type)
++        self.send_header("Content-Length", str(len(data)))
++        self.send_header("Cache-Control", "no-cache, no-store")
++        self.send_header("X-Content-Type-Options", "nosniff")
++        self.end_headers()
++        self.wfile.write(data)
++
++    def send_json(self, status: int, data: dict):
++        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
++        self.send_data(status, payload, "application/json; charset=utf-8")
++
++    def do_GET(self):
++        try:
++            parsed = urlsplit(self.path)
++            query = parse_qs(parsed.query)
++
++            if parsed.path in ("/", "/index.html", "/app.js", "/style.css"):
++                fname = "index.html" if parsed.path in ("/", "/index.html") else parsed.path.lstrip("/")
++                target = STATIC_DIR / fname
++                if not target.exists():
++                    self.send_json(404, {"error": "File not found"})
++                    return
++                mime, _ = mimetypes.guess_type(str(target))
++                self.send_data(200, target.read_bytes(), f"{mime or 'text/plain'}; charset=utf-8")
++                return
++
++            if parsed.path == "/api/session":
++                self.server.refresh_image_list()
++                self.send_json(
++                    200,
++                    {
++                        "images": self.server.images,
++                        "total": len(self.server.images),
++                        "image_dir": str(self.server.image_dir),
++                        "jsonl_path": str(self.server.jsonl_path),
++                    },
++                )
++                return
++
++            if parsed.path == "/api/image":
++                img_rel = query.get("path", [""])[0]
++                img_abs = (self.server.image_dir.parent / img_rel).resolve()
++                if not img_abs.exists() or not img_abs.is_file():
++                    self.send_json(404, {"error": f"Image not found: {img_rel}"})
++                    return
++                mime, _ = mimetypes.guess_type(str(img_abs))
++                self.send_data(200, img_abs.read_bytes(), mime or "image/jpeg")
++                return
++
++            if parsed.path == "/api/annotation":
++                img_rel = query.get("path", [""])[0]
++                img_abs = (self.server.image_dir.parent / img_rel).resolve()
++                if not img_abs.exists():
++                    self.send_json(404, {"error": f"Image not found: {img_rel}"})
++                    return
++
++                record = self.server.store.get(img_rel)
++                if record is None:
++                    # Get image dimensions from disk
++                    with Image.open(img_abs) as im:
++                        w, h = im.size
++                    record = {
++                        "image": img_rel,
++                        "width": w,
++                        "height": h,
++                        "instances": [],
++                    }
++                self.send_json(200, record)
++                return
++
++            self.send_json(404, {"error": "Endpoint not found"})
++
++        except Exception as e:
++            self.send_json(500, {"error": str(e)})
++
++    def do_POST(self):
++        try:
++            parsed = urlsplit(self.path)
++            length = int(self.headers.get("Content-Length", 0))
++            body = json.loads(self.rfile.read(length).decode("utf-8"))
++
++            if parsed.path == "/api/save":
++                img_path = body.get("image")
++                instances = body.get("instances", [])
++                width = body.get("width")
++                height = body.get("height")
++
++                if not img_path:
++                    self.send_json(400, {"error": "Missing image path"})
++                    return
++
++                # Always derive width and height directly from disk image if available
++                img_abs = (self.server.image_dir.parent / img_path).resolve()
++                if img_abs.exists() and img_abs.is_file():
++                    with Image.open(img_abs) as im:
++                        width, height = im.size
++                elif not width or not height:
++                    self.send_json(400, {"error": f"Image not found and no dimensions provided: {img_path}"})
++                    return
++
++                saved_record = self.server.store.put(img_path, width, height, instances)
++                self.send_json(200, {"status": "saved", "record": saved_record})
++                return
++
++            self.send_json(404, {"error": "Endpoint not found"})
++
++        except Exception as e:
++            self.send_json(500, {"error": str(e)})
++
++
++def create_server(
++    image_dir: Path,
++    jsonl_path: Path,
++    host: str = "127.0.0.1",
++    port: int = 8767,
++) -> AnnotationServer:
++    return AnnotationServer(image_dir, jsonl_path, host=host, port=port)
+diff --git a/annotation_app/static/app.js b/annotation_app/static/app.js
+new file mode 100644
+index 0000000..572e178
+--- /dev/null
++++ b/annotation_app/static/app.js
+@@ -0,0 +1,801 @@
++'use strict';
++
++const $ = id => document.getElementById(id);
++
++const state = {
++  images: [],
++  currentIndex: 0,
++  currentImage: null,
++  currentDoc: null,
++  instances: [],
++  selectedIndex: null,
++  scale: 1,
++  panX: 0,
++  panY: 0,
++  fit: true,
++  pointer: null,
++  drawMode: true,
++  dirty: false,
++  saveTimer: null,
++  saving: null,
++};
++
++// API Helpers
++async function fetchJson(url, options) {
++  const res = await fetch(url, options);
++  if (!res.ok) {
++    const err = await res.json().catch(() => ({ error: '请求失败' }));
++    throw new Error(err.error || `HTTP ${res.status}`);
++  }
++  return await res.json();
++}
++
++// Coordinate & Origin Helpers
++function getOrigin() {
++  if (!state.currentImage) return [0, 0];
++  const canvas = $('annotationCanvas');
++  const ox = (canvas.width - state.currentImage.width * state.scale) / 2 + state.panX;
++  const oy = (canvas.height - state.currentImage.height * state.scale) / 2 + state.panY;
++  return [ox, oy];
++}
++
++function screenToImage(e, clamp = true) {
++  if (!state.currentImage) return [0, 0];
++  const canvas = $('annotationCanvas');
++  const r = canvas.getBoundingClientRect();
++  const [ox, oy] = getOrigin();
++  let x = (e.clientX - r.left - ox) / state.scale;
++  let y = (e.clientY - r.top - oy) / state.scale;
++
++  if (clamp) {
++    x = Math.max(0, Math.min(state.currentImage.width, x));
++    y = Math.max(0, Math.min(state.currentImage.height, y));
++  }
++  return [Math.round(x), Math.round(y)];
++}
++
++function imageToScreen(ix, iy) {
++  const [ox, oy] = getOrigin();
++  return [ix * state.scale + ox, iy * state.scale + oy];
++}
++
++// Canvas Rendering
++function draw() {
++  const canvas = $('annotationCanvas');
++  const viewport = $('viewport');
++  if (!canvas || !viewport) return;
++
++  canvas.width = viewport.clientWidth;
++  canvas.height = viewport.clientHeight;
++  const ctx = canvas.getContext('2d');
++
++  ctx.clearRect(0, 0, canvas.width, canvas.height);
++
++  if (!state.currentImage) {
++    ctx.fillStyle = '#666';
++    ctx.font = '14px sans-serif';
++    ctx.textAlign = 'center';
++    ctx.fillText('请选择或加载图像', canvas.width / 2, canvas.height / 2);
++    return;
++  }
++
++  // Calculate fit scale if needed
++  if (state.fit) {
++    const scaleX = (canvas.width - 40) / state.currentImage.width;
++    const scaleY = (canvas.height - 40) / state.currentImage.height;
++    state.scale = Math.min(scaleX, scaleY, 6.0);
++    state.panX = 0;
++    state.panY = 0;
++  }
++
++  const [ox, oy] = getOrigin();
++  const imgW = state.currentImage.width * state.scale;
++  const imgH = state.currentImage.height * state.scale;
++
++  // Draw image
++  ctx.imageSmoothingEnabled = false; // Keep pixel sharpness for OCR/SLP crops
++  ctx.drawImage(state.currentImage, ox, oy, imgW, imgH);
++
++  // Draw image border
++  ctx.strokeStyle = '#555';
++  ctx.lineWidth = 1;
++  ctx.strokeRect(ox, oy, imgW, imgH);
++
++  // Update zoom display
++  $('zoomLevelSpan').textContent = Math.round(state.scale * 100) + '%';
++
++  // Draw annotated bounding boxes
++  state.instances.forEach((inst, idx) => {
++    const isSelected = idx === state.selectedIndex;
++    const b = inst.bbox; // [x1, y1, x2, y2]
++    const [sx1, sy1] = imageToScreen(b[0], b[1]);
++    const [sx2, sy2] = imageToScreen(b[2], b[3]);
++    const bw = sx2 - sx1;
++    const bh = sy2 - sy1;
++
++    // Fill and Stroke
++    ctx.fillStyle = isSelected ? 'rgba(255, 214, 10, 0.25)' : 'rgba(76, 139, 245, 0.2)';
++    ctx.fillRect(sx1, sy1, bw, bh);
++
++    ctx.strokeStyle = isSelected ? '#ffd60a' : '#4c8bf5';
++    ctx.lineWidth = isSelected ? 2 : 1.5;
++    ctx.strokeRect(sx1, sy1, bw, bh);
++
++    // Corner resize handles for selected box
++    if (isSelected) {
++      ctx.fillStyle = '#ffffff';
++      ctx.strokeStyle = '#000000';
++      ctx.lineWidth = 1;
++      const corners = [
++        [sx1, sy1],
++        [sx2, sy1],
++        [sx1, sy2],
++        [sx2, sy2],
++      ];
++      for (const [cx, cy] of corners) {
++        ctx.fillRect(cx - 3.5, cy - 3.5, 7, 7);
++        ctx.strokeRect(cx - 3.5, cy - 3.5, 7, 7);
++      }
++    }
++
++    // Label tag above box
++    const labelText = `[${inst.order}] ${inst.text || '?'}`;
++    ctx.font = 'bold 12px sans-serif';
++    ctx.textAlign = 'left';
++    ctx.textBaseline = 'bottom';
++    const tagPadding = 3;
++    const tagW = ctx.measureText(labelText).width + tagPadding * 2;
++    const tagH = 16;
++    const tagX = sx1;
++    const tagY = Math.max(tagH, sy1 - 2);
++
++    ctx.fillStyle = isSelected ? '#ffd60a' : '#4c8bf5';
++    ctx.fillRect(tagX, tagY - tagH, tagW, tagH);
++
++    ctx.fillStyle = isSelected ? '#000' : '#fff';
++    ctx.fillText(labelText, tagX + tagPadding, tagY - 2);
++  });
++
++  // Draw active drag box
++  if (state.pointer && state.pointer.mode === 'draw') {
++    const p1 = state.pointer.start;
++    const p2 = state.pointer.end;
++    const x1 = Math.min(p1[0], p2[0]);
++    const y1 = Math.min(p1[1], p2[1]);
++    const x2 = Math.max(p1[0], p2[0]);
++    const y2 = Math.max(p1[1], p2[1]);
++
++    const [sx1, sy1] = imageToScreen(x1, y1);
++    const [sx2, sy2] = imageToScreen(x2, y2);
++
++    ctx.fillStyle = 'rgba(52, 199, 89, 0.25)';
++    ctx.fillRect(sx1, sy1, sx2 - sx1, sy2 - sy1);
++
++    ctx.strokeStyle = '#34c759';
++    ctx.lineWidth = 1.5;
++    ctx.setLineDash([4, 3]);
++    ctx.strokeRect(sx1, sy1, sx2 - sx1, sy2 - sy1);
++    ctx.setLineDash([]);
++  }
++}
++
++// Mouse / Pointer Event Handling
++function initPointerEvents() {
++  const canvas = $('annotationCanvas');
++
++  canvas.addEventListener('wheel', e => {
++    if (!state.currentImage) return;
++    e.preventDefault();
++    const r = canvas.getBoundingClientRect();
++    const cursorX = e.clientX - r.left;
++    const cursorY = e.clientY - r.top;
++
++    const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
++    const newScale = Math.max(0.1, Math.min(15.0, state.scale * zoomFactor));
++
++    const [ox, oy] = getOrigin();
++    state.fit = false;
++    $('zoomSelect').value = 'custom';
++
++    state.panX = cursorX - (cursorX - ox) / state.scale * newScale - (canvas.width - state.currentImage.width * newScale) / 2;
++    state.panY = cursorY - (cursorY - oy) / state.scale * newScale - (canvas.height - state.currentImage.height * newScale) / 2;
++    state.scale = newScale;
++
++    draw();
++  }, { passive: false });
++
++  canvas.addEventListener('pointerdown', e => {
++    if (!state.currentImage || e.button !== 0) return;
++    canvas.setPointerCapture(e.pointerId);
++
++    const [ix, iy] = screenToImage(e, false);
++    const [clampedX, clampedY] = screenToImage(e, true);
++
++    // 1. Check if clicking a corner handle of the selected box
++    if (state.selectedIndex !== null) {
++      const selBox = state.instances[state.selectedIndex].bbox;
++      const [sx1, sy1] = imageToScreen(selBox[0], selBox[1]);
++      const [sx2, sy2] = imageToScreen(selBox[2], selBox[3]);
++      const r = canvas.getBoundingClientRect();
++      const cx = e.clientX - r.left;
++      const cy = e.clientY - r.top;
++
++      const corners = [
++        [sx1, sy1], // 0: top-left
++        [sx2, sy1], // 1: top-right
++        [sx1, sy2], // 2: bottom-left
++        [sx2, sy2], // 3: bottom-right
++      ];
++      const hitCorner = corners.findIndex(([hx, hy]) => Math.hypot(hx - cx, hy - cy) < 10);
++      if (hitCorner >= 0) {
++        state.pointer = {
++          mode: 'resize',
++          corner: hitCorner,
++          start: [clampedX, clampedY],
++          before: [...selBox],
++        };
++        return;
++      }
++
++      // 2. Check if clicking inside the selected box for moving (only in select mode)
++      if (!state.drawMode && ix >= selBox[0] && ix <= selBox[2] && iy >= selBox[1] && iy <= selBox[3]) {
++        state.pointer = {
++          mode: 'move',
++          start: [clampedX, clampedY],
++          before: [...selBox],
++        };
++        return;
++      }
++    }
++
++    // 2. In Draw Mode, dragging always creates a new box
++    if (state.drawMode) {
++      state.pointer = {
++        mode: 'draw',
++        start: [clampedX, clampedY],
++        end: [clampedX, clampedY],
++      };
++      state.selectedIndex = null;
++      renderEditor();
++      renderList();
++      draw();
++      return;
++    }
++
++    // 3. In Select/Pan Mode, check if clicking any existing box to select/move it
++    for (let i = state.instances.length - 1; i >= 0; i--) {
++      const b = state.instances[i].bbox;
++      if (ix >= b[0] && ix <= b[2] && iy >= b[1] && iy <= b[3]) {
++        selectInstance(i);
++        state.pointer = {
++          mode: 'move',
++          start: [clampedX, clampedY],
++          before: [...b],
++        };
++        return;
++      }
++    }
++
++    // 4. In Select/Pan Mode, clicking blank area pans the canvas
++    state.pointer = {
++      mode: 'pan',
++      start: [e.clientX, e.clientY],
++      beforePan: [state.panX, state.panY],
++    };
++    state.selectedIndex = null;
++    renderEditor();
++    renderList();
++    draw();
++  });
++
++  canvas.addEventListener('pointermove', e => {
++    if (!state.currentImage) return;
++    const [ix, iy] = screenToImage(e, true);
++    $('cursorPos').textContent = `光标: [${ix}, ${iy}]`;
++
++    if (!state.pointer) return;
++
++    if (state.pointer.mode === 'pan') {
++      state.panX = state.pointer.beforePan[0] + (e.clientX - state.pointer.start[0]);
++      state.panY = state.pointer.beforePan[1] + (e.clientY - state.pointer.start[1]);
++      state.fit = false;
++      $('zoomSelect').value = 'custom';
++      draw();
++      return;
++    }
++
++    if (state.pointer.mode === 'draw') {
++      state.pointer.end = [ix, iy];
++      draw();
++      return;
++    }
++
++    if (state.pointer.mode === 'move') {
++      const dx = ix - state.pointer.start[0];
++      const dy = iy - state.pointer.start[1];
++      const b = state.pointer.before;
++      const w = b[2] - b[0];
++      const h = b[3] - b[1];
++
++      let newX1 = Math.max(0, Math.min(state.currentImage.width - w, b[0] + dx));
++      let newY1 = Math.max(0, Math.min(state.currentImage.height - h, b[1] + dy));
++      let newX2 = newX1 + w;
++      let newY2 = newY1 + h;
++
++      state.instances[state.selectedIndex].bbox = [newX1, newY1, newX2, newY2];
++      renderEditorCoords();
++      draw();
++      return;
++    }
++
++    if (state.pointer.mode === 'resize') {
++      const b = state.pointer.before;
++      const c = state.pointer.corner;
++      let [x1, y1, x2, y2] = b;
++
++      if (c === 0) { // Top-left
++        x1 = Math.min(b[2] - 1, ix);
++        y1 = Math.min(b[3] - 1, iy);
++      } else if (c === 1) { // Top-right
++        x2 = Math.max(b[0] + 1, ix);
++        y1 = Math.min(b[3] - 1, iy);
++      } else if (c === 2) { // Bottom-left
++        x1 = Math.min(b[2] - 1, ix);
++        y2 = Math.max(b[1] + 1, iy);
++      } else if (c === 3) { // Bottom-right
++        x2 = Math.max(b[0] + 1, ix);
++        y2 = Math.max(b[1] + 1, iy);
++      }
++
++      state.instances[state.selectedIndex].bbox = [x1, y1, x2, y2];
++      renderEditorCoords();
++      draw();
++      return;
++    }
++  });
++
++  const endGesture = () => {
++    if (!state.pointer) return;
++    const mode = state.pointer.mode;
++    state.pointer = null;
++
++    if (mode === 'draw') {
++      const p1 = state.pointer?.start || [0, 0];
++      const p2 = state.pointer?.end || [0, 0];
++      // Handled via last event
++    }
++    draw();
++  };
++
++  canvas.addEventListener('pointerup', e => {
++    if (!state.pointer) return;
++    const p = state.pointer;
++    state.pointer = null;
++
++    if (p.mode === 'draw') {
++      const [ix, iy] = screenToImage(e, true);
++      const x1 = Math.min(p.start[0], ix);
++      const y1 = Math.min(p.start[1], iy);
++      const x2 = Math.max(p.start[0], ix);
++      const y2 = Math.max(p.start[1], iy);
++
++      if (x2 - x1 >= 2 && y2 - y1 >= 2) {
++        // Calculate next order (highest current order + 1)
++        const nextOrder = state.instances.length > 0
++          ? Math.max(...state.instances.map(item => item.order)) + 1
++          : 0;
++
++        const newInst = {
++          bbox: [x1, y1, x2, y2],
++          text: '',
++          order: nextOrder,
++        };
++        state.instances.push(newInst);
++        state.selectedIndex = state.instances.length - 1;
++        markDirty();
++        renderList();
++        renderEditor();
++
++        // Focus text input immediately so user can type the character
++        const textInput = $('charTextInput');
++        if (textInput) {
++          textInput.focus();
++          textInput.select();
++        }
++      }
++    } else if (p.mode === 'move' || p.mode === 'resize') {
++      markDirty();
++      renderList();
++    }
++
++    draw();
++  });
++
++  canvas.addEventListener('pointercancel', endGesture);
++}
++
++// Editor and List Sync
++function selectInstance(idx) {
++  if (idx < 0 || idx >= state.instances.length) {
++    state.selectedIndex = null;
++  } else {
++    state.selectedIndex = idx;
++  }
++  renderList();
++  renderEditor();
++  draw();
++}
++
++function renderList() {
++  const container = $('instanceList');
++  $('charCountBadge').textContent = state.instances.length;
++
++  if (state.instances.length === 0) {
++    container.innerHTML = '<p class="empty-list-text">暂无标注字符</p>';
++    return;
++  }
++
++  container.innerHTML = '';
++  // Sort displayed list by order
++  state.instances.forEach((inst, idx) => {
++    const item = document.createElement('div');
++    item.className = 'instance-item' + (idx === state.selectedIndex ? ' selected' : '');
++
++    const orderSpan = document.createElement('span');
++    orderSpan.className = 'item-order';
++    orderSpan.textContent = `[${inst.order}]`;
++
++    const textSpan = document.createElement('span');
++    textSpan.className = 'item-text';
++    textSpan.textContent = inst.text ? inst.text : '(空)';
++
++    const coordsSpan = document.createElement('span');
++    coordsSpan.className = 'item-coords';
++    coordsSpan.textContent = `${inst.bbox[0]},${inst.bbox[1]},${inst.bbox[2]},${inst.bbox[3]}`;
++
++    const delBtn = document.createElement('button');
++    delBtn.className = 'item-delete-btn';
++    delBtn.innerHTML = '&times;';
++    delBtn.title = '删除此框';
++    delBtn.onclick = ev => {
++      ev.stopPropagation();
++      deleteInstance(idx);
++    };
++
++    item.appendChild(orderSpan);
++    item.appendChild(textSpan);
++    item.appendChild(coordsSpan);
++    item.appendChild(delBtn);
++
++    item.onclick = () => selectInstance(idx);
++    container.appendChild(item);
++  });
++}
++
++function renderEditor() {
++  const form = $('editForm');
++  const placeholder = document.querySelector('.placeholder-text');
++
++  if (state.selectedIndex === null || !state.instances[state.selectedIndex]) {
++    form.hidden = true;
++    placeholder.hidden = false;
++    $('selectedBoxCoords').textContent = '未选中框';
++    return;
++  }
++
++  form.hidden = false;
++  placeholder.hidden = true;
++
++  const inst = state.instances[state.selectedIndex];
++  $('charTextInput').value = inst.text || '';
++  $('charOrderInput').value = inst.order;
++  renderEditorCoords();
++}
++
++function renderEditorCoords() {
++  if (state.selectedIndex === null || !state.instances[state.selectedIndex]) return;
++  const b = state.instances[state.selectedIndex].bbox;
++  $('coordX1').value = b[0];
++  $('coordY1').value = b[1];
++  $('coordX2').value = b[2];
++  $('coordY2').value = b[3];
++  $('selectedBoxCoords').textContent = `选框 [${b[0]}, ${b[1]}, ${b[2]}, ${b[3]}] (${b[2] - b[0]}x${b[3] - b[1]})`;
++}
++
++function deleteInstance(idx) {
++  if (idx < 0 || idx >= state.instances.length) return;
++  state.instances.splice(idx, 1);
++  if (state.selectedIndex === idx) {
++    state.selectedIndex = state.instances.length > 0 ? Math.min(idx, state.instances.length - 1) : null;
++  } else if (state.selectedIndex > idx) {
++    state.selectedIndex--;
++  }
++  markDirty();
++  renderList();
++  renderEditor();
++  draw();
++}
++
++// Persistence
++function markDirty() {
++  state.dirty = true;
++  $('saveStatus').textContent = '待保存...';
++  $('saveStatus').style.color = 'var(--text-secondary)';
++
++  clearTimeout(state.saveTimer);
++  state.saveTimer = setTimeout(() => {
++    saveCurrentAnnotation().catch(err => {
++      $('saveStatus').textContent = '保存失败: ' + err.message;
++      $('saveStatus').style.color = 'var(--danger)';
++    });
++  }, 400);
++}
++
++async function saveCurrentAnnotation() {
++  if (!state.currentDoc) return;
++  clearTimeout(state.saveTimer);
++
++  $('saveStatus').textContent = '保存中...';
++  $('saveStatus').style.color = 'var(--accent)';
++
++  const payload = {
++    image: state.currentDoc.image,
++    width: state.currentImage ? state.currentImage.width : state.currentDoc.width,
++    height: state.currentImage ? state.currentImage.height : state.currentDoc.height,
++    instances: state.instances,
++  };
++
++  const res = await fetchJson('/api/save', {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify(payload),
++  });
++
++  state.dirty = false;
++  $('saveStatus').textContent = '已保存 (JSONL)';
++  $('saveStatus').style.color = 'var(--success)';
++
++  // Update session list annotated badge
++  if (state.images[state.currentIndex]) {
++    state.images[state.currentIndex].annotated = state.instances.length > 0;
++    state.images[state.currentIndex].instance_count = state.instances.length;
++    updateSessionProgress();
++  }
++  return res;
++}
++
++// Navigation & Session Loading
++async function loadSession() {
++  $('saveStatus').textContent = '加载列表中...';
++  const data = await fetchJson('/api/session');
++  state.images = data.images || [];
++
++  if (state.images.length === 0) {
++    $('currentFilename').textContent = '无可用图像文件';
++    $('saveStatus').textContent = '图像目录为空';
++    return;
++  }
++
++  $('imgTotalSpan').textContent = `/ ${state.images.length}`;
++  $('imgIndexInput').max = state.images.length;
++  updateSessionProgress();
++
++  await loadImageIndex(0);
++}
++
++function updateSessionProgress() {
++  const annotatedCount = state.images.filter(img => img.annotated).length;
++  $('progressStatus').textContent = `图像 ${annotatedCount} / ${state.images.length} 已标注`;
++}
++
++async function loadImageIndex(index) {
++  if (index < 0 || index >= state.images.length) return;
++
++  // Flush pending changes before navigating away
++  if (state.dirty) {
++    await saveCurrentAnnotation();
++  }
++
++  state.currentIndex = index;
++  $('imgIndexInput').value = index + 1;
++  $('prevBtn').disabled = index === 0;
++  $('nextBtn').disabled = index === state.images.length - 1;
++
++  const item = state.images[index];
++  $('currentFilename').textContent = item.filename;
++
++  // Fetch annotation data and load image concurrently
++  const [doc, image] = await Promise.all([
++    fetchJson('/api/annotation?path=' + encodeURIComponent(item.path)),
++    new Promise((resolve, reject) => {
++      const im = new Image();
++      im.onload = () => resolve(im);
++      im.onerror = () => reject(new Error('图像加载失败'));
++      im.src = '/api/image?path=' + encodeURIComponent(item.path);
++    }),
++  ]);
++
++  state.currentDoc = doc;
++  state.currentImage = image;
++  state.instances = (doc.instances || []).map(inst => ({ ...inst }));
++  state.selectedIndex = state.instances.length > 0 ? 0 : null;
++  state.dirty = false;
++  state.fit = true;
++  state.panX = 0;
++  state.panY = 0;
++
++  $('imgDimensions').textContent = `[${image.width} x ${image.height}]`;
++  $('zoomSelect').value = 'fit';
++  $('saveStatus').textContent = doc.instances?.length > 0 ? '已就绪 (已载入)' : '就绪 (未标注)';
++  $('saveStatus').style.color = 'var(--success)';
++
++  renderList();
++  renderEditor();
++  draw();
++}
++
++// Wire UI Listeners
++function initUI() {
++  $('prevBtn').onclick = () => loadImageIndex(state.currentIndex - 1);
++  $('nextBtn').onclick = () => loadImageIndex(state.currentIndex + 1);
++
++  $('imgIndexInput').onchange = () => {
++    const val = parseInt($('imgIndexInput').value, 10);
++    if (!isNaN(val)) loadImageIndex(val - 1);
++  };
++
++  $('zoomSelect').onchange = e => {
++    const v = e.target.value;
++    if (v === 'fit') {
++      state.fit = true;
++      state.panX = 0;
++      state.panY = 0;
++    } else if (v !== 'custom') {
++      state.fit = false;
++      state.scale = parseFloat(v);
++    }
++    draw();
++  };
++
++  $('resetViewBtn').onclick = () => {
++    state.fit = true;
++    state.panX = 0;
++    state.panY = 0;
++    $('zoomSelect').value = 'fit';
++    draw();
++  };
++
++  function updateDrawModeUI() {
++    $('drawModeBtn').classList.toggle('active', state.drawMode);
++    $('drawModeBtn').textContent = state.drawMode ? '画框模式: 开 (D)' : '画框模式: 关 (移动/浏览)';
++  }
++
++  $('drawModeBtn').onclick = () => {
++    state.drawMode = !state.drawMode;
++    updateDrawModeUI();
++  };
++
++  $('deleteSelectedBtn').onclick = () => {
++    if (state.selectedIndex !== null) deleteInstance(state.selectedIndex);
++  };
++
++  $('clearAllBtn').onclick = () => {
++    if (state.instances.length === 0) return;
++    if (confirm('确认清空当前图像的所有标注框？')) {
++      state.instances = [];
++      state.selectedIndex = null;
++      markDirty();
++      renderList();
++      renderEditor();
++      draw();
++    }
++  };
++
++  // Character inputs
++  $('charTextInput').addEventListener('input', e => {
++    if (state.selectedIndex === null) return;
++    state.instances[state.selectedIndex].text = e.target.value;
++    renderList();
++    draw();
++    markDirty();
++  });
++
++  // Handle Enter key in character input: advance to next box or confirm
++  $('charTextInput').addEventListener('keydown', e => {
++    if (e.key === 'Enter') {
++      e.preventDefault();
++      // If there is a next instance, select it and focus text input
++      if (state.selectedIndex !== null && state.selectedIndex < state.instances.length - 1) {
++        selectInstance(state.selectedIndex + 1);
++        $('charTextInput').focus();
++        $('charTextInput').select();
++      } else {
++        $('charTextInput').blur();
++      }
++    }
++  });
++
++  $('charOrderInput').addEventListener('change', e => {
++    if (state.selectedIndex === null) return;
++    const val = parseInt(e.target.value, 10);
++    if (!isNaN(val)) {
++      state.instances[state.selectedIndex].order = val;
++      state.instances.sort((a, b) => a.order - b.order);
++      state.selectedIndex = state.instances.findIndex(inst => inst.order === val);
++      renderList();
++      draw();
++      markDirty();
++    }
++  });
++
++  ['coordX1', 'coordY1', 'coordX2', 'coordY2'].forEach((id, i) => {
++    $(id).addEventListener('change', () => {
++      if (state.selectedIndex === null) return;
++      const b = state.instances[state.selectedIndex].bbox;
++      const val = parseInt($(id).value, 10);
++      if (!isNaN(val)) {
++        b[i] = val;
++        // Keep order x1 < x2, y1 < y2
++        b[0] = Math.min(b[0], b[2]);
++        b[2] = Math.max(b[0], b[2]);
++        b[1] = Math.min(b[1], b[3]);
++        b[3] = Math.max(b[1], b[3]);
++        renderEditorCoords();
++        draw();
++        markDirty();
++      }
++    });
++  });
++
++  // Global Keyboard Shortcuts
++  window.addEventListener('keydown', e => {
++    // If typing in input or textarea, only allow Escape / Enter
++    const isTyping = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName);
++
++    if (e.key === 'Escape') {
++      state.selectedIndex = null;
++      renderEditor();
++      renderList();
++      draw();
++      return;
++    }
++
++    if (!isTyping) {
++      if (e.key === 'Delete' || e.key === 'Backspace') {
++        e.preventDefault();
++        if (state.selectedIndex !== null) deleteInstance(state.selectedIndex);
++      } else if (e.key === 'PageUp' || (e.key === 'ArrowLeft' && e.altKey)) {
++        e.preventDefault();
++        if (state.currentIndex > 0) loadImageIndex(state.currentIndex - 1);
++      } else if (e.key === 'PageDown' || (e.key === 'ArrowRight' && e.altKey)) {
++        e.preventDefault();
++        if (state.currentIndex < state.images.length - 1) loadImageIndex(state.currentIndex + 1);
++      } else if (e.key === 'd' || e.key === 'D') {
++        state.drawMode = !state.drawMode;
++        updateDrawModeUI();
++      }
++    }
++
++    // Ctrl+S / Command+S manual save
++    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
++      e.preventDefault();
++      saveCurrentAnnotation();
++    }
++  });
++
++  // Help Modal
++  $('helpBtn').onclick = () => $('helpModal').showModal();
++  $('closeHelpBtn').onclick = () => $('helpModal').close();
++
++  window.addEventListener('resize', () => draw());
++}
++
++// Boot
++window.addEventListener('DOMContentLoaded', () => {
++  initPointerEvents();
++  initUI();
++  loadSession().catch(err => {
++    $('saveStatus').textContent = '初始化失败: ' + err.message;
++    $('saveStatus').style.color = 'var(--danger)';
++  });
++});
+diff --git a/annotation_app/static/index.html b/annotation_app/static/index.html
+new file mode 100644
+index 0000000..1398ec3
+--- /dev/null
++++ b/annotation_app/static/index.html
+@@ -0,0 +1,126 @@
++<!doctype html>
++<html lang="zh-CN">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>SynSLP · 字符级标注工具 (Character Annotation)</title>
++  <link rel="stylesheet" href="/style.css">
++  <script src="/app.js" defer></script>
++</head>
++<body>
++  <header>
++    <div class="logo">
++      <span class="badge">SYNSLP</span>
++      <h1>单字符 BBox 标注工具</h1>
++    </div>
++    <div id="progressStatus" class="status-badge">正在加载...</div>
++    <div class="header-actions">
++      <button id="helpBtn" type="button">快捷键说明</button>
++      <span id="saveStatus" class="save-status">已就绪</span>
++    </div>
++  </header>
++
++  <nav class="nav-bar">
++    <div class="nav-group">
++      <button id="prevBtn" type="button" title="上一张 (PageUp)">← 上一张</button>
++      <span class="nav-counter">
++        <input id="imgIndexInput" type="number" min="1" value="1">
++        <span id="imgTotalSpan">/ 1</span>
++      </span>
++      <button id="nextBtn" type="button" title="下一张 (PageDown)">下一张 →</button>
++    </div>
++    <div class="file-info">
++      <span id="currentFilename" class="filename">未选择图像</span>
++      <span id="imgDimensions" class="dimensions"></span>
++    </div>
++    <div class="view-controls">
++      <label>缩放:
++        <select id="zoomSelect">
++          <option value="fit">适应窗口</option>
++          <option value="1">100%</option>
++          <option value="2">200%</option>
++          <option value="3">300%</option>
++          <option value="4">400%</option>
++          <option value="custom">滚轮缩放</option>
++        </select>
++      </label>
++      <span id="zoomLevelSpan">100%</span>
++      <button id="resetViewBtn" type="button">重置视角</button>
++    </div>
++  </nav>
++
++  <main>
++    <section class="canvas-container">
++      <div class="toolbar">
++        <button id="drawModeBtn" type="button" class="tool-btn active" title="点击后在图像上拖拽画框 (快捷键 D)">画框模式 (D)</button>
++        <button id="deleteSelectedBtn" type="button" class="tool-btn danger" title="删除选中框 (Delete / Backspace)">删除所选框</button>
++        <button id="clearAllBtn" type="button" class="tool-btn danger" title="清空当前图像所有框">清空全部</button>
++        <span class="hint-text">拖拽画框 · 拖动边缘/角点调整 · 滚轮缩放 · 拖拽背景平移</span>
++      </div>
++      <div id="viewport" class="viewport">
++        <canvas id="annotationCanvas"></canvas>
++      </div>
++      <div class="canvas-footer">
++        <span id="cursorPos">光标: [0, 0]</span>
++        <span id="selectedBoxCoords">未选中框</span>
++      </div>
++    </section>
++
++    <aside class="sidebar">
++      <section class="panel editor-panel">
++        <h2>当前字符属性编辑</h2>
++        <div id="editorContent" class="editor-content">
++          <p class="placeholder-text">请在左侧画布画框或点击选中已有框</p>
++          <form id="editForm" hidden onsubmit="return false;">
++            <div class="form-row">
++              <label for="charTextInput">字符文本 (Text):</label>
++              <input id="charTextInput" type="text" maxlength="8" autocomplete="off" spellcheck="false" placeholder="例如: 东">
++            </div>
++            <div class="form-row">
++              <label for="charOrderInput">读取顺序 (Order):</label>
++              <input id="charOrderInput" type="number" min="0" step="1">
++            </div>
++            <div class="form-row coords-row">
++              <label>原图像素坐标 [X1, Y1, X2, Y2]:</label>
++              <div class="coords-grid">
++                <input id="coordX1" type="number" title="左 (X1)">
++                <input id="coordY1" type="number" title="上 (Y1)">
++                <input id="coordX2" type="number" title="右 (X2)">
++                <input id="coordY2" type="number" title="下 (Y2)">
++              </div>
++            </div>
++          </form>
++        </div>
++      </section>
++
++      <section class="panel list-panel">
++        <div class="panel-header">
++          <h2>已标注字符列表</h2>
++          <span id="charCountBadge" class="count-badge">0</span>
++        </div>
++        <div id="instanceList" class="instance-list">
++          <p class="empty-list-text">暂无标注字符</p>
++        </div>
++      </section>
++    </aside>
++  </main>
++
++  <!-- Help Modal -->
++  <dialog id="helpModal">
++    <div class="modal-card">
++      <h3>键盘快捷键与操作指南</h3>
++      <ul>
++        <li><strong>左键拖拽</strong>：画出矩形字符框（自动在原图像素坐标系内记录）</li>
++        <li><strong>左键点击已有框</strong>：选中并编辑字符与顺序</li>
++        <li><strong>拖拽选中框主体</strong>：平移位置；<strong>拖拽 4 个角点</strong>：调整宽高</li>
++        <li><strong>滚轮</strong>：以光标为中心无级放大/缩小；<strong>拖拽空白背景</strong>：平移视口</li>
++        <li><strong>D</strong>：切换画框 / 选择模式</li>
++        <li><strong>Delete / Backspace</strong>：删除当前选中的字符框</li>
++        <li><strong>PageUp / PageDown</strong>：快速切换上一张 / 下一张图像</li>
++        <li><strong>自动保存</strong>：每次增删改查均会在 400ms 后自动同步至本地 JSONL 格式</li>
++      </ul>
++      <button id="closeHelpBtn" type="button" class="primary-btn">我知道了</button>
++    </div>
++  </dialog>
++</body>
++</html>
+diff --git a/annotation_app/static/style.css b/annotation_app/static/style.css
+new file mode 100644
+index 0000000..b20b61b
+--- /dev/null
++++ b/annotation_app/static/style.css
+@@ -0,0 +1,464 @@
++:root {
++  --bg-dark: #1e1e24;
++  --bg-panel: #262630;
++  --bg-panel-alt: #2d2d3a;
++  --border-color: #3e3e50;
++  --text-primary: #f0f0f5;
++  --text-secondary: #a0a0b2;
++  --accent: #4c8bf5;
++  --accent-hover: #3b76dc;
++  --accent-active: #2b61bf;
++  --danger: #e05252;
++  --danger-hover: #c43e3e;
++  --success: #34c759;
++  --box-stroke: #4c8bf5;
++  --box-fill: rgba(76, 139, 245, 0.2);
++  --box-active-stroke: #ffd60a;
++  --box-active-fill: rgba(255, 214, 10, 0.25);
++}
++
++* {
++  box-sizing: border-box;
++  margin: 0;
++  padding: 0;
++}
++
++body {
++  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
++  background-color: var(--bg-dark);
++  color: var(--text-primary);
++  height: 100vh;
++  display: flex;
++  flex-direction: column;
++  overflow: hidden;
++  user-select: none;
++}
++
++/* Header */
++header {
++  height: 52px;
++  background-color: var(--bg-panel);
++  border-bottom: 1px solid var(--border-color);
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  padding: 0 20px;
++}
++
++.logo {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++}
++
++.logo h1 {
++  font-size: 16px;
++  font-weight: 600;
++  letter-spacing: 0.5px;
++}
++
++.badge {
++  background-color: var(--accent);
++  color: #fff;
++  font-size: 11px;
++  font-weight: 700;
++  padding: 2px 6px;
++  border-radius: 4px;
++}
++
++.status-badge {
++  font-size: 13px;
++  color: var(--text-secondary);
++}
++
++.header-actions {
++  display: flex;
++  align-items: center;
++  gap: 15px;
++}
++
++.save-status {
++  font-size: 13px;
++  color: var(--success);
++  font-weight: 500;
++}
++
++/* Navigation Bar */
++.nav-bar {
++  height: 44px;
++  background-color: var(--bg-panel-alt);
++  border-bottom: 1px solid var(--border-color);
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  padding: 0 16px;
++  font-size: 13px;
++}
++
++.nav-group {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++}
++
++.nav-counter {
++  display: flex;
++  align-items: center;
++  gap: 4px;
++}
++
++.nav-counter input {
++  width: 50px;
++  text-align: center;
++  background: var(--bg-dark);
++  border: 1px solid var(--border-color);
++  color: #fff;
++  border-radius: 4px;
++  padding: 3px 4px;
++}
++
++.file-info {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++}
++
++.filename {
++  font-weight: 600;
++  color: var(--text-primary);
++  max-width: 420px;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++
++.dimensions {
++  color: var(--text-secondary);
++  font-size: 12px;
++}
++
++.view-controls {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++}
++
++/* Main Layout */
++main {
++  flex: 1;
++  display: flex;
++  overflow: hidden;
++}
++
++.canvas-container {
++  flex: 1;
++  display: flex;
++  flex-direction: column;
++  background-color: #121216;
++  position: relative;
++}
++
++.toolbar {
++  height: 38px;
++  background-color: var(--bg-panel);
++  border-bottom: 1px solid var(--border-color);
++  display: flex;
++  align-items: center;
++  padding: 0 12px;
++  gap: 10px;
++}
++
++.hint-text {
++  margin-left: auto;
++  font-size: 12px;
++  color: var(--text-secondary);
++}
++
++.viewport {
++  flex: 1;
++  position: relative;
++  overflow: hidden;
++  cursor: crosshair;
++}
++
++#annotationCanvas {
++  position: absolute;
++  top: 0;
++  left: 0;
++  width: 100%;
++  height: 100%;
++}
++
++.canvas-footer {
++  height: 28px;
++  background-color: var(--bg-panel);
++  border-top: 1px solid var(--border-color);
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  padding: 0 16px;
++  font-size: 12px;
++  color: var(--text-secondary);
++}
++
++/* Sidebar */
++.sidebar {
++  width: 340px;
++  background-color: var(--bg-panel);
++  border-left: 1px solid var(--border-color);
++  display: flex;
++  flex-direction: column;
++}
++
++.panel {
++  padding: 16px;
++  border-bottom: 1px solid var(--border-color);
++}
++
++.panel h2 {
++  font-size: 14px;
++  font-weight: 600;
++  margin-bottom: 12px;
++  color: var(--text-primary);
++}
++
++.panel-header {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  margin-bottom: 12px;
++}
++
++.panel-header h2 {
++  margin-bottom: 0;
++}
++
++.count-badge {
++  background: var(--bg-panel-alt);
++  color: var(--accent);
++  padding: 2px 8px;
++  border-radius: 12px;
++  font-size: 12px;
++  font-weight: 700;
++}
++
++.editor-panel {
++  min-height: 210px;
++}
++
++.placeholder-text {
++  color: var(--text-secondary);
++  font-size: 13px;
++  text-align: center;
++  margin-top: 30px;
++}
++
++.form-row {
++  margin-bottom: 12px;
++}
++
++.form-row label {
++  display: block;
++  font-size: 12px;
++  color: var(--text-secondary);
++  margin-bottom: 4px;
++}
++
++.form-row input[type="text"],
++.form-row input[type="number"] {
++  width: 100%;
++  padding: 7px 10px;
++  background-color: var(--bg-dark);
++  border: 1px solid var(--border-color);
++  border-radius: 4px;
++  color: #fff;
++  font-size: 14px;
++}
++
++.form-row input:focus {
++  outline: none;
++  border-color: var(--accent);
++}
++
++.coords-grid {
++  display: grid;
++  grid-template-columns: repeat(4, 1fr);
++  gap: 6px;
++}
++
++.coords-grid input {
++  text-align: center;
++  padding: 5px 2px;
++  font-size: 12px;
++}
++
++/* Instance List */
++.list-panel {
++  flex: 1;
++  display: flex;
++  flex-direction: column;
++  overflow: hidden;
++  border-bottom: none;
++}
++
++.instance-list {
++  flex: 1;
++  overflow-y: auto;
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++}
++
++.instance-item {
++  display: flex;
++  align-items: center;
++  background-color: var(--bg-panel-alt);
++  border: 1px solid var(--border-color);
++  padding: 8px 12px;
++  border-radius: 6px;
++  cursor: pointer;
++  transition: border-color 0.15s, background-color 0.15s;
++}
++
++.instance-item:hover {
++  border-color: #555566;
++}
++
++.instance-item.selected {
++  border-color: var(--box-active-stroke);
++  background-color: rgba(255, 214, 10, 0.08);
++}
++
++.item-order {
++  font-size: 12px;
++  color: var(--accent);
++  font-weight: 700;
++  width: 28px;
++}
++
++.item-text {
++  font-size: 16px;
++  font-weight: 600;
++  color: #fff;
++  flex: 1;
++}
++
++.item-coords {
++  font-size: 11px;
++  color: var(--text-secondary);
++  margin-right: 8px;
++}
++
++.item-delete-btn {
++  background: transparent;
++  border: none;
++  color: #888;
++  cursor: pointer;
++  font-size: 16px;
++  padding: 2px 6px;
++}
++
++.item-delete-btn:hover {
++  color: var(--danger);
++}
++
++.empty-list-text {
++  font-size: 13px;
++  color: var(--text-secondary);
++  text-align: center;
++  margin-top: 40px;
++}
++
++/* Buttons and Inputs */
++button {
++  background-color: var(--bg-panel-alt);
++  border: 1px solid var(--border-color);
++  color: var(--text-primary);
++  padding: 5px 12px;
++  border-radius: 4px;
++  cursor: pointer;
++  font-size: 13px;
++  transition: background-color 0.15s;
++}
++
++button:hover {
++  background-color: #38384a;
++}
++
++button:disabled {
++  opacity: 0.4;
++  cursor: not-allowed;
++}
++
++.tool-btn.active {
++  background-color: var(--accent);
++  border-color: var(--accent);
++  color: #fff;
++}
++
++.tool-btn.danger:hover {
++  background-color: var(--danger);
++  border-color: var(--danger);
++  color: #fff;
++}
++
++.primary-btn {
++  background-color: var(--accent);
++  border-color: var(--accent);
++  color: #fff;
++}
++
++.primary-btn:hover {
++  background-color: var(--accent-hover);
++}
++
++select {
++  background-color: var(--bg-dark);
++  border: 1px solid var(--border-color);
++  color: #fff;
++  border-radius: 4px;
++  padding: 4px 6px;
++  font-size: 12px;
++}
++
++/* Dialog */
++dialog {
++  border: 1px solid var(--border-color);
++  border-radius: 8px;
++  background-color: var(--bg-panel);
++  color: #fff;
++  margin: auto;
++  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
++  max-width: 480px;
++}
++
++dialog::backdrop {
++  background-color: rgba(0, 0, 0, 0.6);
++}
++
++.modal-card {
++  padding: 24px;
++}
++
++.modal-card h3 {
++  font-size: 16px;
++  margin-bottom: 16px;
++}
++
++.modal-card ul {
++  font-size: 13px;
++  line-height: 1.7;
++  color: var(--text-secondary);
++  margin-left: 20px;
++  margin-bottom: 20px;
++}
++
++.modal-card li strong {
++  color: var(--text-primary);
++}
++
++.modal-card button {
++  width: 100%;
++  padding: 9px;
++  font-size: 14px;
++}
+diff --git a/annotation_app/store.py b/annotation_app/store.py
+new file mode 100644
+index 0000000..3f4a9b9
+--- /dev/null
++++ b/annotation_app/store.py
+@@ -0,0 +1,125 @@
++"""
++JSONL storage and validation for character-level SLP annotations.
++
++Coordinate Convention:
++- Bounding box format: [x1, y1, x2, y2]
++- x1, y1: top-left corner, inclusive integer pixel coordinate (0 <= x1 < x2 <= width)
++- x2, y2: bottom-right extent, exclusive integer pixel boundary (0 <= y1 < y2 <= height)
++- Box width = x2 - x1, Box height = y2 - y1
++- Clamped strictly to [0, width] and [0, height] of the original source image
++- Independent of browser viewport, zoom factor, or display resolution
++"""
++
++from __future__ import annotations
++
++import json
++import threading
++from pathlib import Path
++from typing import Any, Dict, List, Optional
++from PIL import Image
++
++
++class AnnotationStore:
++    def __init__(self, jsonl_path: Path):
++        self.jsonl_path = Path(jsonl_path)
++        self.jsonl_path.parent.mkdir(parents=True, exist_ok=True)
++        self._lock = threading.RLock()
++        self._records: Dict[str, Dict[str, Any]] = {}
++        self.load()
++
++    def load(self) -> None:
++        """Load all records from JSONL file if it exists."""
++        with self._lock:
++            self._records.clear()
++            if not self.jsonl_path.exists():
++                return
++
++            with open(self.jsonl_path, "r", encoding="utf-8") as f:
++                for line in f:
++                    line = line.strip()
++                    if not line:
++                        continue
++                    try:
++                        data = json.loads(line)
++                        img_key = data.get("image")
++                        if img_key:
++                            self._records[img_key] = data
++                    except json.JSONDecodeError:
++                        continue
++
++    def save_all(self) -> None:
++        """Atomically persist all records to JSONL file."""
++        with self._lock:
++            tmp_path = self.jsonl_path.with_suffix(".tmp")
++            with open(tmp_path, "w", encoding="utf-8") as f:
++                for _, record in sorted(self._records.items()):
++                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
++            tmp_path.replace(self.jsonl_path)
++
++    def get(self, image_path: str) -> Optional[Dict[str, Any]]:
++        with self._lock:
++            rec = self._records.get(image_path)
++            return json.loads(json.dumps(rec)) if rec else None
++
++    def put(
++        self,
++        image_path: str,
++        width: int,
++        height: int,
++        instances: List[Dict[str, Any]],
++    ) -> Dict[str, Any]:
++        """
++        Validate, clamp, sort and store an image's character annotations.
++        Each instance:
++          bbox: [x1, y1, x2, y2]
++          text: str
++          order: int
++        """
++        validated_instances = []
++        for idx, inst in enumerate(instances):
++            raw_box = inst.get("bbox", [])
++            if len(raw_box) != 4:
++                continue
++
++            x1 = max(0, min(width, int(round(raw_box[0]))))
++            y1 = max(0, min(height, int(round(raw_box[1]))))
++            x2 = max(0, min(width, int(round(raw_box[2]))))
++            y2 = max(0, min(height, int(round(raw_box[3]))))
++
++            # Ensure x1 < x2, y1 < y2
++            left = min(x1, x2)
++            right = max(x1, x2)
++            top = min(y1, y2)
++            bottom = max(y1, y2)
++
++            if right - left < 1 or bottom - top < 1:
++                continue
++
++            text = str(inst.get("text", "")).strip()
++            order = inst.get("order", idx)
++            try:
++                order = int(order)
++            except (ValueError, TypeError):
++                order = idx
++
++            validated_instances.append(
++                {
++                    "bbox": [left, top, right, bottom],
++                    "text": text,
++                    "order": order,
++                }
++            )
++
++        # Sort instances deterministically by order, then left coordinate
++        validated_instances.sort(key=lambda item: (item["order"], item["bbox"][0]))
++
++        record = {
++            "image": image_path,
++            "width": width,
++            "height": height,
++            "instances": validated_instances,
++        }
++        with self._lock:
++            self._records[image_path] = record
++            self.save_all()
++        return record
+diff --git a/annotations/character_annotations.jsonl b/annotations/character_annotations.jsonl
+new file mode 100644
+index 0000000..25e4d23
+--- /dev/null
++++ b/annotations/character_annotations.jsonl
+@@ -0,0 +1 @@
++{"image": "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg", "width": 239, "height": 57, "instances": [{"bbox": [5, 8, 45, 54], "text": "东", "order": 0}, {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1}, {"bbox": [125, 7, 139, 51], "text": "1", "order": 2}, {"bbox": [158, 7, 183, 56], "text": "6", "order": 3}, {"bbox": [204, 7, 229, 52], "text": "8", "order": 4}]}
+diff --git a/scripts/acceptance_test_step5.py b/scripts/acceptance_test_step5.py
+new file mode 100644
+index 0000000..659ee4b
+--- /dev/null
++++ b/scripts/acceptance_test_step5.py
+@@ -0,0 +1,185 @@
 +#!/usr/bin/env python3
 +"""
-+SynSLP AnyText2 Controlled A/B Experiment: Baseline vs Font Mimic
-+
-+Target: Test whether native Font Mimic / font-hint conditioning materially
-+improves style preservation when editing tight-crop SLP "东泰168" to "苏航268".
-+
-+Conditions:
-+- A. Baseline:   Native AnyText2 edit with font_hint_image=[None]*5, font_hint_mask=[None]*5
-+- B. Font Mimic: Native AnyText2 edit with font_hint_image populated from reference image,
-+                 and font_hint_mask populated from user mask.
-+
-+All other parameters (seed, steps, CFG, prompts, strength=1.0, resolution) strictly identical.
++End-to-end Step 5 acceptance test script for SynSLP character-level annotation tool.
++Executes the full human/MVP acceptance flow defined in .ai-bridge/current-plan.md.
 +"""
 +
-+import os
++import json
++import subprocess
 +import sys
 +import time
-+import shutil
-+import argparse
 +from pathlib import Path
-+import numpy as np
-+import cv2
-+import torch
++from urllib.request import Request, urlopen
 +
++ROOT_DIR = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT_DIR))
 +
-+def parse_args():
-+    parser = argparse.ArgumentParser(description="AnyText2 Baseline vs Font Mimic A/B")
-+    parser.add_argument(
-+        "--ref_image",
-+        type=str,
-+        default="/mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg",
-+        help="Path to reference image",
-+    )
-+    parser.add_argument(
-+        "--mask_image",
-+        type=str,
-+        default="/mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png",
-+        help="Path to mask image",
-+    )
-+    parser.add_argument("--target_text", type=str, default="苏航268")
-+    parser.add_argument("--seed", type=int, default=2026)
-+    parser.add_argument("--strength", type=float, default=1.0)
-+    parser.add_argument("--ddim_steps", type=int, default=20)
-+    parser.add_argument("--cfg_scale", type=float, default=9.0)
-+    parser.add_argument("--render_w", type=int, default=512)
-+    parser.add_argument("--render_h", type=int, default=128)
-+    parser.add_argument(
-+        "--output_dir",
-+        type=str,
-+        default="/mnt/data/zyx/SynSLP/outputs/font_mimic_ab/dongtai168",
-+    )
-+    parser.add_argument("--device", type=str, default="cuda:0")
-+    return parser.parse_args()
++from annotation_app.server import create_server
++from annotation_app.store import AnnotationStore
 +
-+
-+def validate_inputs(ref_path: Path, mask_path: Path):
-+    print("=" * 60)
-+    print("Step 1: Validating Fixed Inputs")
-+    print("=" * 60)
-+
-+    if not ref_path.exists():
-+        raise FileNotFoundError(f"Reference image not found: {ref_path}")
-+    if not mask_path.exists():
-+        raise FileNotFoundError(f"Mask image not found: {mask_path}")
-+
-+    ref_bgr = cv2.imread(str(ref_path))
-+    if ref_bgr is None:
-+        raise ValueError(f"Failed to read reference image: {ref_path}")
-+
-+    mask_bgr = cv2.imread(str(mask_path))
-+    if mask_bgr is None:
-+        raise ValueError(f"Failed to read mask image: {mask_path}")
-+
-+    ref_h, ref_w = ref_bgr.shape[:2]
-+    mask_h, mask_w = mask_bgr.shape[:2]
-+
-+    print(f"Reference path:   {ref_path}")
-+    print(f"Reference shape:  ({ref_h}, {ref_w}, {ref_bgr.shape[2]})")
-+    print(f"Mask path:        {mask_path}")
-+    print(f"Mask shape:       ({mask_h}, {mask_w}, {mask_bgr.shape[2]})")
-+
-+    if (ref_h, ref_w) != (mask_h, mask_w):
-+        raise ValueError(
-+            f"Dimension mismatch! Reference is ({ref_w}x{ref_h}) but mask is ({mask_w}x{mask_h})"
-+        )
-+
-+    unique_vals = np.unique(mask_bgr)
-+    print(f"Mask unique values: {unique_vals.tolist()}")
-+    editable_pixels = np.sum(mask_bgr[..., 0] > 0)
-+    total_pixels = ref_h * ref_w
-+    pct = (editable_pixels / total_pixels) * 100
-+    print(f"Editable text pixels (value 255): {editable_pixels}/{total_pixels} ({pct:.2f}%)")
-+    print("Input validation: PASS")
-+
-+    return ref_bgr, mask_bgr, (ref_w, ref_h)
-+
-+
-+def create_comparison_grid(
-+    items: list,
-+    output_path: Path,
-+    img_size: tuple = None,
-+):
-+    """
-+    Creates a clean vertically stacked comparison with text label headers.
-+    items: list of (label, bgr_image)
-+    """
-+    card_list = []
-+    target_w = items[0][1].shape[1] if img_size is None else img_size[0]
-+    target_h = items[0][1].shape[0] if img_size is None else img_size[1]
-+    header_h = 28
-+
-+    for label, img in items:
-+        if img.shape[:2] != (target_h, target_w):
-+            rendered = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
-+        else:
-+            rendered = img.copy()
-+
-+        # Create header bar
-+        header = np.full((header_h, target_w, 3), (35, 35, 35), dtype=np.uint8)
-+        font = cv2.FONT_HERSHEY_SIMPLEX
-+        font_scale = 0.6 if target_w >= 400 else 0.45
-+        thickness = 1
-+        text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
-+        text_x = 12
-+        text_y = (header_h + text_size[1]) // 2
-+        cv2.putText(header, label, (text_x, text_y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
-+
-+        card = np.vstack([header, rendered])
-+        card_list.append(card)
-+
-+    separator = np.full((10, target_w, 3), (20, 20, 20), dtype=np.uint8)
-+    grid_rows = []
-+    for i, card in enumerate(card_list):
-+        grid_rows.append(card)
-+        if i < len(card_list) - 1:
-+            grid_rows.append(separator)
-+
-+    final_grid = np.vstack(grid_rows)
-+    cv2.imwrite(str(output_path), final_grid)
-+    print(f"Saved comparison grid: {output_path} ({final_grid.shape[1]}x{final_grid.shape[0]})")
++IMG_REL = "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg"
++JSONL_PATH = ROOT_DIR / "annotations" / "character_annotations.jsonl"
++PORT = 8767
++HOST = "127.0.0.1"
 +
 +
 +def main():
-+    args = parse_args()
++    print("=" * 65)
++    print("SynSLP Step 5 Acceptance Test on 东泰168")
++    print("=" * 65)
 +
-+    ref_path = Path(args.ref_image)
-+    mask_path = Path(args.mask_image)
-+    output_dir = Path(args.output_dir)
-+    output_dir.mkdir(parents=True, exist_ok=True)
++    # 1. Start web server
++    print("\n[Step 1] Starting annotation server...")
++    server = create_server(
++        image_dir=ROOT_DIR / "reference",
++        jsonl_path=JSONL_PATH,
++        host=HOST,
++        port=PORT,
++    )
++    import threading
++    t = threading.Thread(target=server.serve_forever, daemon=True)
++    t.start()
++    time.sleep(0.5)
++    print(f"  -> Server running at http://{HOST}:{PORT}")
 +
-+    # 1. Validate inputs
-+    ref_bgr, mask_bgr, orig_dims = validate_inputs(ref_path, mask_path)
-+    orig_w, orig_h = orig_dims
++    # 2. Open image & session check
++    print("\n[Step 2] Querying /api/session...")
++    req = Request(f"http://{HOST}:{PORT}/api/session")
++    with urlopen(req) as res:
++        assert res.status == 200
++        session_data = json.loads(res.read().decode())
++    print(f"  -> Total images: {session_data['total']}")
++    found = any(item["path"] == IMG_REL for item in session_data["images"])
++    assert found, f"Image {IMG_REL} not found in session!"
++    print(f"  -> Image found in session: {IMG_REL}")
 +
-+    # Copy reference and mask into experiment directory for inspection
-+    shutil.copy2(ref_path, output_dir / "reference.jpg")
-+    shutil.copy2(mask_path, output_dir / "mask.png")
-+
-+    # 2. Setup AnyText2 inference environment
-+    root_dir = Path(__file__).resolve().parent.parent
-+    anytext2_dir = root_dir / "third_party" / "AnyText2"
-+    if not anytext2_dir.exists():
-+        raise FileNotFoundError(f"AnyText2 directory not found: {anytext2_dir}")
-+
-+    sys.path.insert(0, str(anytext2_dir))
-+    os.chdir(str(anytext2_dir))
-+
-+    print("\n" + "=" * 60)
-+    print("Step 2: Initializing AnyText2 Model")
-+    print("=" * 60)
-+
-+    from ms_wrapper import AnyText2Model
-+
-+    t_start_load = time.time()
-+    model = AnyText2Model(
-+        model_dir="./models",
-+        use_fp16=True,
-+        use_translator=False,
-+        font_path="font/Arial_Unicode.ttf",
-+        model_path="models/anytext_v2.0.ckpt",
-+    ).cuda(0)
-+    t_load = time.time() - t_start_load
-+    print(f"AnyText2Model loaded on GPU in {t_load:.2f}s (FP16 mode, translator disabled).")
-+
-+    # In-memory deterministic resolution adaptation to valid SD multiple of 64
-+    render_w = args.render_w
-+    render_h = args.render_h
-+    print(f"\nResolution policy: Scaling in-memory from ({orig_w}x{orig_h}) to ({render_w}x{render_h})")
-+
-+    ref_rgb_scaled = cv2.resize(ref_bgr[..., ::-1], (render_w, render_h), interpolation=cv2.INTER_LANCZOS4)
-+    mask_scaled = cv2.resize(mask_bgr, (render_w, render_h), interpolation=cv2.INTER_NEAREST)
-+
-+    # Fixed base parameters across both conditions
-+    fixed_base_params = {
-+        "mode": "edit",
-+        "sort_priority": "↔",
-+        "show_debug": False,
-+        "revise_pos": False,
-+        "image_count": 1,
-+        "ddim_steps": args.ddim_steps,
-+        "image_width": render_w,
-+        "image_height": render_h,
-+        "strength": args.strength,
-+        "attnx_scale": 1.0,
-+        "font_hollow": False,
-+        "cfg_scale": args.cfg_scale,
-+        "eta": 0.0,
-+        "a_prompt": "a Chinese ship license plate, white text, realistic photo",
-+        "n_prompt": "low quality, blurry, noisy",
-+        "base_model_path": "",
-+        "lora_path_ratio": "",
-+        "glyline_font_path": ["None"] * 5,
-+        "text_colors": "500,500,500 500,500,500 500,500,500 500,500,500 500,500,500",
-+    }
-+
-+    input_data = {
-+        "img_prompt": "a Chinese ship license plate",
-+        "text_prompt": f'"{args.target_text}"',
-+        "seed": args.seed,
-+        "draw_pos": mask_scaled,
-+        "ori_image": ref_rgb_scaled,
-+    }
-+
-+    print("\n" + "=" * 60)
-+    print("Step 3: Running A/B Conditions")
-+    print(f"Target Text:    \"{args.target_text}\"")
-+    print(f"Fixed Seed:     {args.seed}")
-+    print(f"Fixed Steps:    {args.ddim_steps}")
-+    print(f"Fixed Strength: {args.strength}")
-+    print(f"Fixed CFG:      {args.cfg_scale}")
-+    print("=" * 60)
-+
-+    # Condition A: Baseline (Font Mimic disabled)
-+    print("\n---> Running Condition A: Baseline (Font Mimic disabled) ...")
-+    params_a = dict(fixed_base_params)
-+    params_a["font_hint_image"] = [None] * 5
-+    params_a["font_hint_mask"] = [None] * 5
-+
-+    t0 = time.time()
-+    with torch.no_grad():
-+        results_a, code_a, warn_a, _ = model(input_data, **params_a)
-+    t_a = time.time() - t0
-+    if code_a < 0:
-+        raise RuntimeError(f"Baseline inference failed: {warn_a}")
-+
-+    out_a_512 = results_a[0][..., ::-1]
-+    path_a_512 = output_dir / "baseline.png"
-+    cv2.imwrite(str(path_a_512), out_a_512)
-+
-+    out_a_orig = cv2.resize(out_a_512, (orig_w, orig_h), interpolation=cv2.INTER_LANCZOS4)
-+    path_a_orig = output_dir / "baseline_orig_res.png"
-+    cv2.imwrite(str(path_a_orig), out_a_orig)
-+    print(f"PASS: Baseline generated in {t_a:.2f}s")
-+    print(f"Saved: {path_a_512} ({render_w}x{render_h})")
-+    print(f"Saved: {path_a_orig} ({orig_w}x{orig_h})")
-+
-+    # Condition B: Font Mimic (Font hint enabled from reference and mask)
-+    print("\n---> Running Condition B: Font Mimic (Font hint enabled) ...")
-+    params_b = dict(fixed_base_params)
-+    # Native API expects font_hint_image to be RGB array (H, W, 3)
-+    # and font_hint_mask to be single-channel uint8 array (H, W, 1) with values > 0
-+    params_b["font_hint_image"] = [ref_rgb_scaled, None, None, None, None]
-+    params_b["font_hint_mask"] = [mask_scaled[..., 0:1], None, None, None, None]
-+
-+    t0 = time.time()
-+    with torch.no_grad():
-+        results_b, code_b, warn_b, _ = model(input_data, **params_b)
-+    t_b = time.time() - t0
-+    if code_b < 0:
-+        raise RuntimeError(f"Font Mimic inference failed: {warn_b}")
-+
-+    out_b_512 = results_b[0][..., ::-1]
-+    path_b_512 = output_dir / "font_mimic.png"
-+    cv2.imwrite(str(path_b_512), out_b_512)
-+
-+    out_b_orig = cv2.resize(out_b_512, (orig_w, orig_h), interpolation=cv2.INTER_LANCZOS4)
-+    path_b_orig = output_dir / "font_mimic_orig_res.png"
-+    cv2.imwrite(str(path_b_orig), out_b_orig)
-+    print(f"PASS: Font Mimic generated in {t_b:.2f}s")
-+    print(f"Saved: {path_b_512} ({render_w}x{render_h})")
-+    print(f"Saved: {path_b_orig} ({orig_w}x{orig_h})")
-+
-+    # 4. Create comparison grids
-+    print("\n" + "=" * 60)
-+    print("Step 4: Creating Comparison Grids")
-+    print("=" * 60)
-+
-+    comparison_items_512 = [
-+        ("Reference: 东泰168", ref_bgr),
-+        (f"A. Baseline: 苏航268 (Elapsed: {t_a:.2f}s)", out_a_512),
-+        (f"B. Font Mimic: 苏航268 (Elapsed: {t_b:.2f}s)", out_b_512),
++    # 3 & 4. Create five boxes for 东 / 泰 / 1 / 6 / 8 and assign text & order
++    print("\n[Steps 3 & 4] Creating annotations for 东 / 泰 / 1 / 6 / 8...")
++    test_instances = [
++        {"bbox": [5, 8, 45, 54], "text": "东", "order": 0},
++        {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1},
++        {"bbox": [125, 7, 139, 51], "text": "1", "order": 2},
++        {"bbox": [158, 7, 183, 56], "text": "6", "order": 3},
++        {"bbox": [204, 7, 229, 52], "text": "8", "order": 4},
 +    ]
-+    grid_path_512 = output_dir / "comparison.png"
-+    create_comparison_grid(comparison_items_512, grid_path_512, (render_w, render_h))
 +
-+    comparison_items_orig = [
-+        ("Reference: 东泰168", ref_bgr),
-+        (f"A. Baseline: 苏航268 (Elapsed: {t_a:.2f}s)", out_a_orig),
-+        (f"B. Font Mimic: 苏航268 (Elapsed: {t_b:.2f}s)", out_b_orig),
-+    ]
-+    grid_path_orig = output_dir / "comparison_orig_res.png"
-+    create_comparison_grid(comparison_items_orig, grid_path_orig, (orig_w, orig_h))
++    # 5. Save/autosave via API
++    print("\n[Step 5] Saving annotations to /api/save...")
++    save_payload = {
++        "image": IMG_REL,
++        "width": 239,
++        "height": 57,
++        "instances": test_instances,
++    }
++    req = Request(
++        f"http://{HOST}:{PORT}/api/save",
++        data=json.dumps(save_payload).encode("utf-8"),
++        headers={"Content-Type": "application/json"},
++        method="POST",
++    )
++    with urlopen(req) as res:
++        assert res.status == 200
++        save_res = json.loads(res.read().decode())
++        assert save_res["status"] == "saved"
++    print("  -> Save confirmed by server API.")
 +
-+    print("\n" + "=" * 60)
-+    print("A/B Experiment Summary")
-+    print("=" * 60)
-+    print(f"Target Text:       {args.target_text}")
-+    print(f"Seed:              {args.seed}")
-+    print(f"Strength:          {args.strength}")
-+    print(f"Steps:             {args.ddim_steps}")
-+    print(f"CFG Scale:         {args.cfg_scale}")
-+    print(f"A (Baseline):      {t_a:.2f}s -> {path_a_512}")
-+    print(f"B (Font Mimic):    {t_b:.2f}s -> {path_b_512}")
-+    print(f"Comparison Grid:   {grid_path_512}")
-+    print("A/B EXPERIMENT COMPLETED SUCCESSFULLY")
++    # 6. Restart server / reload
++    print("\n[Step 6] Shutting down and restarting server to simulate refresh/restart...")
++    server.shutdown()
++    server.server_close()
++    time.sleep(0.3)
++
++    server2 = create_server(
++        image_dir=ROOT_DIR / "reference",
++        jsonl_path=JSONL_PATH,
++        host=HOST,
++        port=PORT,
++    )
++    t2 = threading.Thread(target=server2.serve_forever, daemon=True)
++    t2.start()
++    time.sleep(0.5)
++
++    # 7. Verify all five boxes, text labels, and order restore exactly
++    print("\n[Step 7] Querying /api/annotation after restart...")
++    from urllib.parse import quote
++    encoded_rel = quote(IMG_REL)
++    req = Request(f"http://{HOST}:{PORT}/api/annotation?path={encoded_rel}")
++    with urlopen(req) as res:
++        assert res.status == 200
++        reloaded = json.loads(res.read().decode())
++
++    assert len(reloaded["instances"]) == 5, f"Expected 5 instances, got {len(reloaded['instances'])}"
++    for orig, loaded in zip(test_instances, reloaded["instances"]):
++        assert orig["text"] == loaded["text"], f"Text mismatch: {orig['text']} vs {loaded['text']}"
++        assert orig["order"] == loaded["order"], f"Order mismatch: {orig['order']} vs {loaded['order']}"
++        assert orig["bbox"] == loaded["bbox"], f"BBox mismatch: {orig['bbox']} vs {loaded['bbox']}"
++        print(f"  [Verified] Glyph '{loaded['text']}': Order {loaded['order']}, BBox {loaded['bbox']}")
++
++    # 8. Verify persisted coordinates map to original image dimensions
++    print("\n[Step 8] Verifying original coordinate bounds...")
++    w = reloaded["width"]
++    h = reloaded["height"]
++    assert w == 239 and h == 57, f"Dimensions mismatch: {w}x{h}"
++    for inst in reloaded["instances"]:
++        x1, y1, x2, y2 = inst["bbox"]
++        assert 0 <= x1 < x2 <= w, f"Invalid X bounds: {x1}, {x2} for width {w}"
++        assert 0 <= y1 < y2 <= h, f"Invalid Y bounds: {y1}, {y2} for height {h}"
++    print(f"  -> All bounding boxes strictly within image bounds [239, 57].")
++
++    # 9. Edit one box and delete/recreate one box to verify update semantics
++    print("\n[Step 9] Testing edit and delete/recreate semantics...")
++    edited_instances = [inst.copy() for inst in reloaded["instances"]]
++    # Edit box 0 (东) slightly: [5, 8, 46, 54]
++    edited_instances[0]["bbox"] = [5, 8, 46, 54]
++    # Delete box 4 (8)
++    del edited_instances[4]
++    # Recreate box 4 with order 4
++    edited_instances.append({"bbox": [203, 7, 229, 53], "text": "8", "order": 4})
++
++    save_payload["instances"] = edited_instances
++    req = Request(
++        f"http://{HOST}:{PORT}/api/save",
++        data=json.dumps(save_payload).encode("utf-8"),
++        headers={"Content-Type": "application/json"},
++        method="POST",
++    )
++    with urlopen(req) as res:
++        assert res.status == 200
++
++    # Verify update
++    req = Request(f"http://{HOST}:{PORT}/api/annotation?path={encoded_rel}")
++    with urlopen(req) as res:
++        updated = json.loads(res.read().decode())
++    assert len(updated["instances"]) == 5
++    assert updated["instances"][0]["bbox"] == [5, 8, 46, 54]
++    assert updated["instances"][4]["bbox"] == [203, 7, 229, 53]
++    print("  -> Update semantics verified (edit + delete/recreate).")
++
++    # 10. Export/finalize annotation artifact (restore canonical clean boxes)
++    print("\n[Step 10] Finalizing canonical annotation record...")
++    save_payload["instances"] = test_instances
++    req = Request(
++        f"http://{HOST}:{PORT}/api/save",
++        data=json.dumps(save_payload).encode("utf-8"),
++        headers={"Content-Type": "application/json"},
++        method="POST",
++    )
++    with urlopen(req) as res:
++        assert res.status == 200
++
++    server2.shutdown()
++    server2.server_close()
++
++    print(f"  -> Canonical JSONL artifact saved at: {JSONL_PATH}")
++    with open(JSONL_PATH, "r", encoding="utf-8") as f:
++        print("  -> JSONL Content:")
++        for line in f:
++            print(f"     {line.strip()}")
++
++    print("\n" + "=" * 65)
++    print("Acceptance test on 东泰168 successfully passed all checks!")
++    print("=" * 65)
 +
 +
 +if __name__ == "__main__":
 +    main()
+diff --git a/scripts/generate_character_masks.py b/scripts/generate_character_masks.py
+new file mode 100644
+index 0000000..09f0ad3
+--- /dev/null
++++ b/scripts/generate_character_masks.py
+@@ -0,0 +1,124 @@
++#!/usr/bin/env python3
++"""
++Utility to generate binary edit masks from character-level annotations.
++Proves downstream usability of the annotation schema without coupling to AnyText2.
++Uses pure PIL (Image / ImageDraw) for maximum portability without cv2/numpy dependencies.
++"""
++
++import argparse
++import json
++import sys
++from pathlib import Path
++from PIL import Image, ImageDraw
++
++ROOT_DIR = Path(__file__).resolve().parent.parent
++
++
++def parse_args():
++    parser = argparse.ArgumentParser(
++        description="Generate binary mask(s) from character bbox annotations."
++    )
++    parser.add_argument(
++        "--annotations",
++        type=Path,
++        default=ROOT_DIR / "annotations" / "character_annotations.jsonl",
++        help="Path to JSONL annotation file",
++    )
++    parser.add_argument(
++        "--image",
++        type=str,
++        default="reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg",
++        help="Image relative or filename key in annotation file",
++    )
++    parser.add_argument(
++        "--select",
++        type=str,
++        nargs="+",
++        default=["1", "泰", "泰168", "东泰168"],
++        help="Character text sequence(s) or character list to mask",
++    )
++    parser.add_argument(
++        "--output-dir",
++        type=Path,
++        default=ROOT_DIR / "outputs" / "character_masks",
++        help="Output directory for generated masks",
++    )
++    return parser.parse_args()
++
++
++def load_annotation(jsonl_path: Path, image_key: str):
++    if not jsonl_path.exists():
++        raise FileNotFoundError(f"Annotations file not found: {jsonl_path}")
++
++    matched_record = None
++    with open(jsonl_path, "r", encoding="utf-8") as f:
++        for line in f:
++            line = line.strip()
++            if not line:
++                continue
++            rec = json.loads(line)
++            if rec.get("image") == image_key or Path(rec.get("image", "")).name == Path(image_key).name:
++                matched_record = rec
++                break
++
++    if matched_record is None:
++        raise ValueError(f"No annotation record found for image: {image_key}")
++    return matched_record
++
++
++def generate_mask_for_chars(record: dict, chars_to_mask: str) -> tuple[Image.Image, list]:
++    w = record["width"]
++    h = record["height"]
++    instances = record.get("instances", [])
++
++    mask_img = Image.new("L", (w, h), 0)
++    draw = ImageDraw.Draw(mask_img)
++
++    target_char_set = set(chars_to_mask)
++    matched_boxes = []
++
++    for inst in instances:
++        text = inst.get("text", "")
++        if text and text in target_char_set:
++            x1, y1, x2, y2 = inst["bbox"]
++            # In PIL, rectangle [x0, y0, x1, y1] is inclusive
++            draw.rectangle([x1, y1, max(x1, x2 - 1), max(y1, y2 - 1)], fill=255)
++            matched_boxes.append((text, [x1, y1, x2, y2]))
++
++    return mask_img, matched_boxes
++
++
++def main():
++    args = parse_args()
++    output_dir = args.output_dir.resolve()
++    output_dir.mkdir(parents=True, exist_ok=True)
++
++    record = load_annotation(args.annotations.resolve(), args.image)
++    w = record["width"]
++    h = record["height"]
++    print("=" * 60)
++    print("Generating Character Masks from Annotations")
++    print(f"Image:       {record['image']} ({w}x{h})")
++    print(f"Total BBoxes in Record: {len(record.get('instances', []))}")
++    print("=" * 60)
++
++    for sel in args.select:
++        mask_img, boxes = generate_mask_for_chars(record, sel)
++        out_filename = f"mask_{sel}.png"
++        out_path = output_dir / out_filename
++        mask_img.save(out_path)
++
++        # Count active pixels
++        raw_bytes = mask_img.tobytes()
++        active_px = sum(1 for b in raw_bytes if b > 0)
++        total_px = w * h
++        pct = (active_px / total_px) * 100
++        print(f"Selection '{sel}': matched {len(boxes)} boxes, active pixels {active_px}/{total_px} ({pct:.2f}%)")
++        print(f"  -> Saved: {out_path}")
++
++    print("=" * 60)
++    print(f"All requested masks successfully generated in {output_dir}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/run_annotation_tool.py b/scripts/run_annotation_tool.py
+new file mode 100644
+index 0000000..c226056
+--- /dev/null
++++ b/scripts/run_annotation_tool.py
+@@ -0,0 +1,83 @@
++#!/usr/bin/env python3
++"""
++CLI entry point to launch the local character-level annotation web tool for SynSLP.
++"""
++
++import argparse
++import sys
++from pathlib import Path
++
++# Ensure SynSLP repo root is in python path
++ROOT_DIR = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT_DIR))
++
++from annotation_app.server import create_server
++
++
++def parse_args():
++    parser = argparse.ArgumentParser(
++        description="Launch SynSLP local character-level bbox annotation tool."
++    )
++    parser.add_argument(
++        "--image-dir",
++        type=Path,
++        default=ROOT_DIR / "reference",
++        help="Directory containing images to annotate (default: reference/)",
++    )
++    parser.add_argument(
++        "--annotations",
++        type=Path,
++        default=ROOT_DIR / "annotations" / "character_annotations.jsonl",
++        help="Target JSONL file for storing annotations (default: annotations/character_annotations.jsonl)",
++    )
++    parser.add_argument(
++        "--port",
++        type=int,
++        default=8767,
++        help="Local port to listen on (default: 8767)",
++    )
++    parser.add_argument(
++        "--host",
++        type=str,
++        default="127.0.0.1",
++        help="Listen address (default: 127.0.0.1)",
++    )
++    return parser.parse_args()
++
++
++def main():
++    args = parse_args()
++    image_dir = args.image_dir.resolve()
++    annotations_file = args.annotations.resolve()
++
++    if not image_dir.exists():
++        print(f"[SynSLP] Creating image directory: {image_dir}")
++        image_dir.mkdir(parents=True, exist_ok=True)
++
++    annotations_file.parent.mkdir(parents=True, exist_ok=True)
++
++    server = create_server(
++        image_dir=image_dir,
++        jsonl_path=annotations_file,
++        host=args.host,
++        port=args.port,
++    )
++
++    print("=" * 65)
++    print(f"SynSLP Character-Level BBox Annotation Tool")
++    print(f"URL:             http://{args.host}:{args.port}")
++    print(f"Image Directory: {image_dir} ({len(server.images)} images found)")
++    print(f"Annotations:     {annotations_file}")
++    print("=" * 65)
++    print("Press Ctrl+C to stop.")
++
++    try:
++        server.serve_forever()
++    except KeyboardInterrupt:
++        print("\nShutting down server.")
++    finally:
++        server.server_close()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/sync_annotations_to_server.sh b/scripts/sync_annotations_to_server.sh
+new file mode 100644
+index 0000000..f8531e6
+--- /dev/null
++++ b/scripts/sync_annotations_to_server.sh
+@@ -0,0 +1,60 @@
++#!/usr/bin/env bash
++# SynSLP Explicit Annotation Synchronization Utility
++# Syncs local character annotations to server-zyx:/mnt/data/zyx/SynSLP/annotations/
++
++set -euo pipefail
++
++ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++LOCAL_ANNOTATIONS_DIR="$ROOT_DIR/annotations"
++SERVER_HOST="server-zyx"
++SERVER_DIR="/mnt/data/zyx/SynSLP/annotations"
++DRY_RUN=0
++
++for arg in "$@"; do
++  if [[ "$arg" == "--dry-run" || "$arg" == "-n" ]]; then
++    DRY_RUN=1
++  fi
++done
++
++echo "============================================================"
++echo "SynSLP Local -> Server Annotation Sync"
++echo "============================================================"
++echo "Local Source:     $LOCAL_ANNOTATIONS_DIR"
++echo "Server Target:    $SERVER_HOST:$SERVER_DIR"
++
++if [[ ! -d "$LOCAL_ANNOTATIONS_DIR" ]]; then
++  echo "ERROR: Local annotations directory does not exist: $LOCAL_ANNOTATIONS_DIR"
++  exit 1
++fi
++
++FILES_TO_SYNC=$(find "$LOCAL_ANNOTATIONS_DIR" -maxdepth 2 -type f -name "*.jsonl")
++if [[ -z "$FILES_TO_SYNC" ]]; then
++  echo "WARNING: No .jsonl annotation files found in $LOCAL_ANNOTATIONS_DIR."
++  exit 0
++fi
++
++echo "Files to synchronize:"
++echo "$FILES_TO_SYNC" | sed 's/^/  - /'
++echo
++
++if [[ "$DRY_RUN" -eq 1 ]]; then
++  echo "[DRY RUN] Would execute:"
++  echo "  ssh -o ClearAllForwardings=yes $SERVER_HOST \"mkdir -p $SERVER_DIR\""
++  echo "  scp -o ClearAllForwardings=yes $LOCAL_ANNOTATIONS_DIR/*.jsonl $SERVER_HOST:$SERVER_DIR/"
++  echo "[DRY RUN] No files transferred."
++  exit 0
++fi
++
++echo "Creating destination directory on $SERVER_HOST..."
++ssh -o ClearAllForwardings=yes "$SERVER_HOST" "mkdir -p $SERVER_DIR"
++
++echo "Transferring annotation artifacts..."
++scp -o ClearAllForwardings=yes "$LOCAL_ANNOTATIONS_DIR"/*.jsonl "$SERVER_HOST:$SERVER_DIR/"
++
++echo
++echo "Verifying transferred files on $SERVER_HOST:"
++ssh -o ClearAllForwardings=yes "$SERVER_HOST" "ls -la $SERVER_DIR/*.jsonl"
++
++echo "============================================================"
++echo "SUCCESS: Annotation synchronization completed."
++echo "============================================================"
+diff --git a/tests/test_annotation_app.py b/tests/test_annotation_app.py
+new file mode 100644
+index 0000000..e3c91bf
+--- /dev/null
++++ b/tests/test_annotation_app.py
+@@ -0,0 +1,192 @@
++"""
++Unit and integration tests for SynSLP character-level annotation tool.
++"""
++
++import json
++import shutil
++import tempfile
++import threading
++import time
++import unittest
++from pathlib import Path
++from urllib.request import Request, urlopen
++from PIL import Image
++
++from annotation_app.server import create_server
++from annotation_app.store import AnnotationStore
++from scripts.generate_character_masks import generate_mask_for_chars
++
++
++class TestAnnotationStore(unittest.TestCase):
++    def setUp(self):
++        self.temp_dir = Path(tempfile.mkdtemp())
++        self.jsonl_path = self.temp_dir / "annotations.jsonl"
++        self.store = AnnotationStore(self.jsonl_path)
++
++    def tearDown(self):
++        shutil.rmtree(self.temp_dir, ignore_errors=True)
++
++    def test_put_and_get(self):
++        instances = [
++            {"bbox": [10.2, 5.8, 40.1, 48.9], "text": "东", "order": 0},
++            {"bbox": [50.0, 5.0, 90.0, 50.0], "text": "泰", "order": 1},
++        ]
++        rec = self.store.put("test.jpg", 239, 57, instances)
++        self.assertEqual(rec["image"], "test.jpg")
++        self.assertEqual(rec["width"], 239)
++        self.assertEqual(rec["height"], 57)
++        self.assertEqual(len(rec["instances"]), 2)
++        # Coordinate clamping and integer casting
++        self.assertEqual(rec["instances"][0]["bbox"], [10, 6, 40, 49])
++        self.assertEqual(rec["instances"][0]["text"], "东")
++        self.assertEqual(rec["instances"][0]["order"], 0)
++
++        # Retrieve and verify
++        got = self.store.get("test.jpg")
++        self.assertIsNotNone(got)
++        self.assertEqual(got, rec)
++
++    def test_clamping_and_ordering(self):
++        # Out of bounds and reversed coordinates
++        instances = [
++            {"bbox": [200, 10, 150, 40], "text": "6", "order": 3},
++            {"bbox": [-10, -5, 300, 100], "text": "全", "order": 0},
++        ]
++        rec = self.store.put("clamp.jpg", 200, 50, instances)
++        # Order 0 first
++        self.assertEqual(rec["instances"][0]["order"], 0)
++        self.assertEqual(rec["instances"][0]["bbox"], [0, 0, 200, 50])
++        # Order 3 second, normalized x1 < x2
++        self.assertEqual(rec["instances"][1]["order"], 3)
++        self.assertEqual(rec["instances"][1]["bbox"], [150, 10, 200, 40])
++
++    def test_persistence_reload(self):
++        instances = [
++            {"bbox": [5, 8, 45, 54], "text": "东", "order": 0},
++            {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1},
++            {"bbox": [125, 7, 139, 51], "text": "1", "order": 2},
++            {"bbox": [158, 7, 183, 56], "text": "6", "order": 3},
++            {"bbox": [204, 7, 229, 52], "text": "8", "order": 4},
++        ]
++        self.store.put("ref.jpg", 239, 57, instances)
++
++        # Create fresh store instance on same file
++        new_store = AnnotationStore(self.jsonl_path)
++        rec = new_store.get("ref.jpg")
++        self.assertIsNotNone(rec)
++        self.assertEqual(len(rec["instances"]), 5)
++        texts = [inst["text"] for inst in rec["instances"]]
++        self.assertEqual(texts, ["东", "泰", "1", "6", "8"])
++
++
++class TestAnnotationServer(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.temp_dir = Path(tempfile.mkdtemp())
++        cls.img_dir = cls.temp_dir / "images"
++        cls.img_dir.mkdir(parents=True)
++        # Create test image
++        cls.img_path = cls.img_dir / "test_plate.jpg"
++        im = Image.new("RGB", (239, 57), color=(20, 30, 80))
++        im.save(cls.img_path)
++
++        cls.jsonl_path = cls.temp_dir / "annotations.jsonl"
++        cls.port = 8789
++        cls.server = create_server(cls.img_dir, cls.jsonl_path, host="127.0.0.1", port=cls.port)
++        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
++        cls.thread.start()
++        time.sleep(0.3)
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.server.shutdown()
++        cls.server.server_close()
++        shutil.rmtree(cls.temp_dir, ignore_errors=True)
++
++    def test_static_files(self):
++        for path in ["/", "/index.html", "/app.js", "/style.css"]:
++            url = f"http://127.0.0.1:{self.port}{path}"
++            req = Request(url)
++            with urlopen(req) as res:
++                self.assertEqual(res.status, 200)
++                content = res.read()
++                self.assertGreater(len(content), 50)
++
++    def test_session_and_image(self):
++        url = f"http://127.0.0.1:{self.port}/api/session"
++        with urlopen(url) as res:
++            self.assertEqual(res.status, 200)
++            data = json.loads(res.read().decode())
++            self.assertEqual(data["total"], 1)
++            self.assertEqual(data["images"][0]["filename"], "test_plate.jpg")
++
++        img_rel = data["images"][0]["path"]
++        img_url = f"http://127.0.0.1:{self.port}/api/image?path={img_rel}"
++        with urlopen(img_url) as res:
++            self.assertEqual(res.status, 200)
++            bytes_data = res.read()
++            self.assertGreater(len(bytes_data), 100)
++
++    def test_save_and_restore(self):
++        save_url = f"http://127.0.0.1:{self.port}/api/save"
++        payload = {
++            "image": "images/test_plate.jpg",
++            "instances": [
++                {"bbox": [10, 10, 50, 50], "text": "苏", "order": 0},
++                {"bbox": [60, 10, 100, 50], "text": "A", "order": 1},
++            ],
++        }
++        req = Request(
++            save_url,
++            data=json.dumps(payload).encode("utf-8"),
++            headers={"Content-Type": "application/json"},
++            method="POST",
++        )
++        with urlopen(req) as res:
++            self.assertEqual(res.status, 200)
++            res_data = json.loads(res.read().decode())
++            self.assertEqual(res_data["status"], "saved")
++            self.assertEqual(res_data["record"]["width"], 239)
++            self.assertEqual(res_data["record"]["height"], 57)
++
++        # GET annotation
++        get_url = f"http://127.0.0.1:{self.port}/api/annotation?path=images/test_plate.jpg"
++        with urlopen(get_url) as res:
++            self.assertEqual(res.status, 200)
++            rec = json.loads(res.read().decode())
++            self.assertEqual(len(rec["instances"]), 2)
++            self.assertEqual(rec["instances"][0]["text"], "苏")
++            self.assertEqual(rec["instances"][1]["text"], "A")
++
++
++class TestMaskGeneration(unittest.TestCase):
++    def test_generate_masks(self):
++        record = {
++            "image": "reference/dongtai.jpg",
++            "width": 239,
++            "height": 57,
++            "instances": [
++                {"bbox": [5, 8, 45, 54], "text": "东", "order": 0},
++                {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1},
++                {"bbox": [125, 7, 139, 51], "text": "1", "order": 2},
++                {"bbox": [158, 7, 183, 56], "text": "6", "order": 3},
++                {"bbox": [204, 7, 229, 52], "text": "8", "order": 4},
++            ],
++        }
++        # Mask single char "1"
++        mask1, boxes1 = generate_mask_for_chars(record, "1")
++        self.assertEqual(mask1.size, (239, 57))
++        self.assertEqual(len(boxes1), 1)
++        self.assertEqual(boxes1[0][0], "1")
++
++        # Mask "泰168"
++        mask_tai168, boxes_tai168 = generate_mask_for_chars(record, "泰168")
++        self.assertEqual(len(boxes_tai168), 4)
++
++        # Mask "东泰168"
++        mask_all, boxes_all = generate_mask_for_chars(record, "东泰168")
++        self.assertEqual(len(boxes_all), 5)
++
++
++if __name__ == "__main__":
++    unittest.main()

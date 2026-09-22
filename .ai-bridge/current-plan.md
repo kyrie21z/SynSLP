@@ -1,6 +1,6 @@
-# Compare AnyText2 baseline vs Font Mimic
+# Build local character bbox annotation tool
 
-Updated: 2026-09-22T09:15:52.223Z
+Updated: 2026-09-22T10:29:54.033Z
 Workspace: /home/kyrie/cxprojects/SynSLP
 Target agent: Codex (codex)
 
@@ -8,174 +8,235 @@ Target agent: Codex (codex)
 
 # Goal
 
-Run exactly one controlled AnyText2 A/B experiment on the representative tight-crop SLP `东泰168` to answer one question:
+Build the minimum sufficient **local web annotation tool** for SynSLP character-level annotations by reusing as much code as practical from the existing local project:
 
-> Does AnyText2's native Font Mimic / font-hint conditioning materially improve style preservation when editing the text from `东泰168` to `苏航268`?
+`/home/kyrie/cxprojects/SLPAnnotation`
 
-This is NOT a strength sweep and NOT a synthetic-data pipeline task.
+The tool is for annotating:
+- one bounding box per visible character/glyph;
+- the text inside each box;
+- character reading order.
 
-The previous strength experiment is complete. Its key engineering finding is that the current `strength` parameter is a Control/WriteNet conditioning scale, not an img2img denoising-strength control. Therefore do not sweep or reinterpret `strength` again. Fix it at `1.0`.
+Annotation is performed **locally**. The resulting annotation artifact is saved locally first, then explicitly synchronized to `server-zyx` as a separate step.
 
-The current manually supplied edit mask covers about 87.79% of the tight SLP crop. Standard AnyText2 edit therefore has very little unmasked SLP content available as a preservation anchor inside the crop. The purpose of this experiment is only to test whether the model's existing native font/style hint path can recover useful reference style under this exact setup.
+Do not couple annotation UI, AnyText2 inference, GPU/server execution, mask generation, or synthetic-data generation.
 
-## Fixed inputs
+# First-principles constraints
 
-Server:
+The annotation artifact must preserve only source-of-truth human labels:
+
+[
+	ext{image} + 	ext{original-pixel bbox} + 	ext{character text} + 	ext{order}
+]
+
+Do NOT store derived AnyText2 artifacts such as:
+- edit masks;
+- font-hint masks;
+- padded/dilated boxes;
+- 512x512 coordinates;
+- letterbox coordinates;
+- generated images.
+
+Those must be derived later from the raw annotations so mask policies can change without re-annotation.
+
+All bbox coordinates must be saved in **original image pixel coordinates**, independent of browser zoom/display size.
+
+# Step 1 — Read-only reuse audit of SLPAnnotation
+
+Before writing implementation code, inspect `/home/kyrie/cxprojects/SLPAnnotation` read-only.
+
+Identify the exact existing technology stack and reusable modules for:
+1. image loading/navigation;
+2. canvas/image rendering and bbox drawing;
+3. bbox selection/move/resize/delete interactions;
+4. text/label editing;
+5. annotation persistence/loading;
+6. keyboard shortcuts and progress state;
+7. any existing backend routes or local file APIs.
+
+Record in `.ai-bridge/agent-status.md`:
+- framework(s) and entry points;
+- files/modules worth reusing;
+- whether reuse should be direct copy, small adaptation, or not reused;
+- any license/config/runtime constraints;
+- the smallest implementation path for SynSLP.
+
+Hard rules:
+- do not modify `SLPAnnotation`;
+- do not redesign from scratch before completing this audit;
+- if `SLPAnnotation` is inaccessible from the executor environment, stop and report the blocker rather than inventing its structure.
+
+# Step 2 — Implement the smallest local annotation MVP in SynSLP
+
+Implement inside the SynSLP repository, following the audited SLPAnnotation stack/conventions where practical.
+
+The MVP must support exactly these operations:
+
+1. **Image navigation**
+   - load images from a configurable local image directory;
+   - next / previous image;
+   - show current index and total count;
+   - preserve current annotation when navigating.
+
+2. **Bounding-box annotation**
+   - drag to create a rectangular bbox;
+   - select an existing bbox;
+   - move and resize it;
+   - delete it;
+   - display each box's text label visibly.
+
+3. **Text + order**
+   - every bbox stores its text;
+   - intended use is one character/glyph per box;
+   - assign deterministic reading order;
+   - allow correcting text and order after creation.
+
+4. **Persistence**
+   - auto-save locally after meaningful edits;
+   - reload annotations exactly after browser refresh/restart;
+   - no database unless the reused SLPAnnotation implementation already uses one and reuse is materially simpler than file persistence.
+
+5. **Coordinate correctness**
+   - browser/display coordinates are converted back to original image pixel coordinates before persistence;
+   - zoom/responsive display must not change saved annotations.
+
+Do not add authentication, multi-user collaboration, cloud storage, task assignment, review workflows, OCR-assisted labeling, model inference, or UI theming.
+
+# Step 3 — Freeze a simple annotation schema
+
+Use one canonical local artifact, preferably JSONL unless the reused application has an equally simple established format.
+
+Each image record must contain at least:
+
+```json
+{
+  "image": "relative/or/stable/image/path.jpg",
+  "width": 239,
+  "height": 57,
+  "instances": [
+    {
+      "bbox": [12, 8, 43, 50],
+      "text": "东",
+      "order": 0
+    }
+  ]
+}
+```
+
+Requirements:
+- bbox convention must be explicitly documented, e.g. `[x1, y1, x2, y2]`;
+- define whether `x2/y2` are inclusive or exclusive and keep it consistent;
+- coordinates are integers in original image pixels;
+- reject/clamp boxes outside image bounds deterministically;
+- no duplicate hidden coordinate system;
+- stable ordering when records are rewritten.
+
+If the reused SLPAnnotation format differs, add a thin export/conversion layer rather than forcing a large rewrite.
+
+# Step 4 — Add explicit local-to-server sync as a separate utility
+
+Only after the local MVP works, add the smallest explicit sync mechanism for annotation artifacts.
+
+Target:
 - host: `server-zyx`
 - repo: `/mnt/data/zyx/SynSLP`
 
-Reference image:
-- `/mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg`
+Requirements:
+- synchronization is invoked explicitly by the user, not automatically by the web app;
+- sync only annotation artifacts/config needed by downstream processing;
+- do not sync browser caches, local environment files, source images unless explicitly required;
+- never overwrite unrelated server data;
+- use an existing safe project sync convention if one already exists; otherwise a small documented `rsync/scp` helper is sufficient;
+- include a dry-run or clear destination echo before transfer if practical.
 
-User-provided mask:
-- `/mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png`
+Do not trigger AnyText2 after sync.
 
-Target text:
-- exactly `苏航268`
+# Step 5 — Acceptance test on 东泰168
 
-Generator:
-- existing verified AnyText2 deployment
-- keep the currently pinned AnyText2 revision, checkpoint, FP16 environment, compatibility patch, and translator-disabled configuration unchanged
+Use the existing local reference image if present:
 
-Fixed generation parameters:
-- mode: `edit`
-- seed: `2026`
-- strength: `1.0`
-- DDIM steps: `20`
-- CFG scale: `9.0`
-- eta: `0.0`
-- sort priority: `↔`
-- revise_pos: `False`
-- attnx_scale: `1.0`
-- font_hollow: `False`
-- img_prompt: current `a Chinese ship license plate`
-- a_prompt: current neutral prompt `a Chinese ship license plate, white text, realistic photo`
-- n_prompt: current `low quality, blurry, noisy`
-- text_colors: leave unchanged from the working path
-- resolution policy: use the same deterministic `239x57 -> 512x128` in-memory scaling already verified by the strength-tuning script, with the same interpolation choices
+`reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg`
 
-Do not change any of these between A and B.
+If that exact local path is unavailable, use one representative local SLP image and record the substitution.
 
-## Step 1 — Verify the exact native Font Mimic interface
+Human/MVP acceptance flow:
 
-Before implementing the comparison, inspect only the pinned AnyText2 code actually used by the working deployment and determine the exact runtime semantics of:
-- `font_hint_image`
-- `font_hint_mask`
-- their list length / per-text-line indexing
-- accepted image/mask shape, dtype, value range, color order, and resolution
-- whether the hint mask is interpreted as text/reference region and how it is resized internally
+1. start the local web app;
+2. open the image;
+3. create five boxes for `东 / 泰 / 1 / 6 / 8`;
+4. assign corresponding text and reading order;
+5. save/autosave;
+6. refresh/restart;
+7. verify all five boxes, text labels, and order restore exactly;
+8. verify persisted coordinates map to the original image dimensions;
+9. edit one box and delete/recreate one box to verify update semantics;
+10. export/finalize the annotation artifact;
+11. run the explicit sync utility to the server destination and verify the artifact exists there unchanged.
 
-Do not guess these details and do not redesign AnyText2.
+Record exact commands, output paths, annotation file path, and verification evidence in `.ai-bridge/agent-status.md`.
 
-Record the relevant upstream file/function names and the conclusion in `.ai-bridge/agent-status.md`.
+# Optional but valuable focused test
 
-Hard constraint:
-- Use the user's existing reference image as the source of the font/style hint.
-- Use the user's existing mask as the source of the font-hint region if it is compatible with the native API.
-- If the native API requires only deterministic format adaptation (resize, channel conversion, dtype/range conversion), do that in memory and record it.
-- Do NOT manually redraw, shrink, expand, erode, dilate, blur, or otherwise invent a new mask.
-- If the supplied mask is fundamentally incompatible with Font Mimic semantics, stop and report that exact incompatibility instead of silently substituting another mask.
+If it is trivial after the MVP is working, add one small deterministic utility/test that converts selected annotated bboxes into a binary mask in original image coordinates, solely to prove the annotation schema is downstream-usable.
 
-## Step 2 — Implement the smallest A/B entry point
+For `东泰168`, demonstrate that selecting:
+- `1`;
+- `泰`;
+- `泰168`;
+- `东泰168`;
 
-Prefer minimally modifying or reusing the existing single-image tuning code. Do not create a general pipeline or new package architecture.
+produces masks aligned to the annotated boxes.
 
-Run two conditions from the same model load and with identical fixed inputs/parameters:
+This utility must remain separate from the annotation web app and must not introduce AnyText2 inference.
 
-### A. Baseline
-Native AnyText2 edit with Font Mimic disabled:
-- `font_hint_image = [None] * 5`
-- `font_hint_mask = [None] * 5`
+Skip this if it materially expands scope.
 
-### B. Font Mimic
-Native AnyText2 edit with Font Mimic enabled for the single target text entry:
-- populate the correct first/active font-hint slot using the reference image
-- populate the corresponding font-hint mask slot using the user mask
-- leave unused slots exactly as required by the native API
+# Expected repository shape
 
-Do not alter `glyline_font_path`, prompt wording, target text, seed, edit mask, strength, resolution, or any other parameter merely to make B look better.
+Prefer the structure already used by the reused SLPAnnotation code. If no natural structure exists, keep additions minimal, for example:
 
-Both A and B must be generated fresh under the same current code/config; do not use an old strength-sweep image as the baseline unless you first prove it is produced with byte-identical effective parameters. Fresh A/B generation is preferred.
+```text
+SynSLP/
+├── annotation_app/          # only if needed by reused stack
+├── annotations/             # gitignore generated local annotation data if appropriate
+├── scripts/
+│   └── sync_annotations_to_server.sh
+└── docs/ or README section  # minimal run/use instructions
+```
 
-## Step 3 — Run exactly the two conditions
+Do not create a complex package hierarchy without evidence that the reused code requires it.
 
-Write outputs under a dedicated directory, for example:
+# Stop conditions
 
-`/mnt/data/zyx/SynSLP/outputs/font_mimic_ab/dongtai168/`
-
-Required artifacts:
-- `reference.png` or an exact review copy of the reference
-- `mask.png` or an exact review copy of the mask
-- `baseline.png` — diffusion-resolution A output
-- `font_mimic.png` — diffusion-resolution B output
-- `baseline_orig_res.png` — A scaled back to 239x57
-- `font_mimic_orig_res.png` — B scaled back to 239x57
-- `comparison.png` — labeled visual comparison containing at minimum:
-  1. Reference: 东泰168
-  2. Baseline: 苏航268
-  3. Font Mimic: 苏航268
-
-Keep the comparison rendering itself lossless and do not apply enhancement or post-processing.
-
-Record inference time and warnings/errors for both conditions.
-
-## Step 4 — Produce review evidence and stop
-
-Update `.ai-bridge/agent-status.md` with:
-- exact reference and mask paths
-- target text
-- exact fixed generation parameters
-- exact Font Mimic API semantics found in pinned upstream code
-- exact preprocessing applied to reference/mask for the font-hint path
-- A and B output paths
-- inference time for A and B
-- any warnings/errors
-- files changed and verification performed
-
-Do NOT auto-score, OCR-filter, or declare a winner.
-
-The human review will judge only:
-1. Is the generated text actually visually consistent with `苏航268`?
-2. Does Font Mimic preserve the original `东泰168` glyph/font/paint style better than Baseline?
-3. Does it reduce unnecessary regeneration of the SLP's original visual appearance?
-4. Are the Chinese characters and digits more natural and coherent?
-
-## Decision boundary
-
-This experiment must not make the downstream decision automatically, but its purpose is to supply evidence for this binary choice:
-
-- If Font Mimic gives a clear qualitative improvement, continue refining the AnyText2 SLP editing formulation.
-- If Font Mimic still substantially redraws the whole tight-crop plate or fails to preserve useful style, treat that as evidence that standard AnyText2 editing is poorly matched to this tight-crop SLP use case; stop brute-force parameter tuning before considering another reference-preserving editing approach.
-
-## Stop condition
-
-Stop immediately after the two fresh outputs and the review comparison/evidence are produced.
+Stop when:
+- the local bbox+text annotation MVP works;
+- refresh/restart persistence is verified;
+- original-pixel coordinates are verified;
+- the annotation artifact is explicitly synchronized to server successfully;
+- evidence is recorded.
 
 Out of scope:
-- any additional strength values
-- seed sweep
-- prompt sweep
-- mask redesign
-- new reference images
-- new target strings
-- multiple samples
-- OCR verification/filtering
-- automatic image-quality metrics
-- batch generation
-- manifest generation
-- synthetic-data pipeline
-- Qwen comparison
-- model training/fine-tuning
-- AnyText2 architecture modification
-- downstream SLPR training
+- AnyText2 generation;
+- edit-mask policy tuning;
+- font-hint-mask policy tuning;
+- 512x512 letterboxing;
+- OCR auto-labeling;
+- automatic character segmentation;
+- batch synthetic generation;
+- dataset filtering;
+- downstream SLPR training;
+- annotation platform user accounts;
+- multi-annotator review/QA;
+- production deployment.
 
-## Implementation contract
+# Implementation contract
 
-- Keep edits minimal and reviewable.
-- Treat the pinned AnyText2 implementation as the source of truth for Font Mimic semantics.
-- Do not modify third-party AnyText2 architecture to force this experiment to work.
-- Run only focused verification required for this A/B.
-- Update `.ai-bridge/agent-status.md` with the final evidence.
+- Reuse before rewriting.
+- Keep `SLPAnnotation` read-only.
+- Work in small, reviewable steps.
+- Do not silently change the agreed annotation schema or coordinate convention.
+- Run focused verification.
+- Update `.ai-bridge/agent-status.md` with files reused/copied, files created/changed, commands, checks, results, blockers, and exact annotation/sync artifact paths.
 - Save the final review diff to `.ai-bridge/implementation-diff.patch` when practical.
 - Append notable execution events to `.ai-bridge/execution-log.jsonl` when supported.
 

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SynSLP · 字符级标注工具 (Character Annotation)</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <span class="badge">SYNSLP</span>
+      <h1>单字符 BBox 标注工具</h1>
+    </div>
+    <div id="progressStatus" class="status-badge">正在加载...</div>
+    <div class="header-actions">
+      <button id="helpBtn" type="button">快捷键说明</button>
+      <span id="saveStatus" class="save-status">已就绪</span>
+    </div>
+  </header>
+
+  <nav class="nav-bar">
+    <div class="nav-group">
+      <button id="prevBtn" type="button" title="上一张 (PageUp)">← 上一张</button>
+      <span class="nav-counter">
+        <input id="imgIndexInput" type="number" min="1" value="1">
+        <span id="imgTotalSpan">/ 1</span>
+      </span>
+      <button id="nextBtn" type="button" title="下一张 (PageDown)">下一张 →</button>
+    </div>
+    <div class="file-info">
+      <span id="currentFilename" class="filename">未选择图像</span>
+      <span id="imgDimensions" class="dimensions"></span>
+    </div>
+    <div class="view-controls">
+      <label>缩放:
+        <select id="zoomSelect">
+          <option value="fit">适应窗口</option>
+          <option value="1">100%</option>
+          <option value="2">200%</option>
+          <option value="3">300%</option>
+          <option value="4">400%</option>
+          <option value="custom">滚轮缩放</option>
+        </select>
+      </label>
+      <span id="zoomLevelSpan">100%</span>
+      <button id="resetViewBtn" type="button">重置视角</button>
+    </div>
+  </nav>
+
+  <main>
+    <section class="canvas-container">
+      <div class="toolbar">
+        <button id="drawModeBtn" type="button" class="tool-btn active" title="点击后在图像上拖拽画框 (快捷键 D)">画框模式 (D)</button>
+        <button id="deleteSelectedBtn" type="button" class="tool-btn danger" title="删除选中框 (Delete / Backspace)">删除所选框</button>
+        <button id="clearAllBtn" type="button" class="tool-btn danger" title="清空当前图像所有框">清空全部</button>
+        <span class="hint-text">拖拽画框 · 拖动边缘/角点调整 · 滚轮缩放 · 拖拽背景平移</span>
+      </div>
+      <div id="viewport" class="viewport">
+        <canvas id="annotationCanvas"></canvas>
+      </div>
+      <div class="canvas-footer">
+        <span id="cursorPos">光标: [0, 0]</span>
+        <span id="selectedBoxCoords">未选中框</span>
+      </div>
+    </section>
+
+    <aside class="sidebar">
+      <section class="panel editor-panel">
+        <h2>当前字符属性编辑</h2>
+        <div id="editorContent" class="editor-content">
+          <p class="placeholder-text">请在左侧画布画框或点击选中已有框</p>
+          <form id="editForm" hidden onsubmit="return false;">
+            <div class="form-row">
+              <label for="charTextInput">字符文本 (Text):</label>
+              <input id="charTextInput" type="text" maxlength="8" autocomplete="off" spellcheck="false" placeholder="例如: 东">
+            </div>
+            <div class="form-row">
+              <label for="charOrderInput">读取顺序 (Order):</label>
+              <input id="charOrderInput" type="number" min="0" step="1">
+            </div>
+            <div class="form-row coords-row">
+              <label>原图像素坐标 [X1, Y1, X2, Y2]:</label>
+              <div class="coords-grid">
+                <input id="coordX1" type="number" title="左 (X1)">
+                <input id="coordY1" type="number" title="上 (Y1)">
+                <input id="coordX2" type="number" title="右 (X2)">
+                <input id="coordY2" type="number" title="下 (Y2)">
+              </div>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel list-panel">
+        <div class="panel-header">
+          <h2>已标注字符列表</h2>
+          <span id="charCountBadge" class="count-badge">0</span>
+        </div>
+        <div id="instanceList" class="instance-list">
+          <p class="empty-list-text">暂无标注字符</p>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- Help Modal -->
+  <dialog id="helpModal">
+    <div class="modal-card">
+      <h3>键盘快捷键与操作指南</h3>
+      <ul>
+        <li><strong>左键拖拽</strong>：画出矩形字符框（自动在原图像素坐标系内记录）</li>
+        <li><strong>左键点击已有框</strong>：选中并编辑字符与顺序</li>
+        <li><strong>拖拽选中框主体</strong>：平移位置；<strong>拖拽 4 个角点</strong>：调整宽高</li>
+        <li><strong>滚轮</strong>：以光标为中心无级放大/缩小；<strong>拖拽空白背景</strong>：平移视口</li>
+        <li><strong>D</strong>：切换画框 / 选择模式</li>
+        <li><strong>Delete / Backspace</strong>：删除当前选中的字符框</li>
+        <li><strong>PageUp / PageDown</strong>：快速切换上一张 / 下一张图像</li>
+        <li><strong>自动保存</strong>：每次增删改查均会在 400ms 后自动同步至本地 JSONL 格式</li>
+      </ul>
+      <button id="closeHelpBtn" type="button" class="primary-btn">我知道了</button>
+    </div>
+  </dialog>
+</body>
+</html>
