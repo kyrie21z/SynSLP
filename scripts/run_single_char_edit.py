@@ -280,11 +280,13 @@ def main():
     img_prompt = "a realistic photo of a Chinese ship license plate"
     text_prompt = f'"{args.replacement_text}"'
 
+    mask_512_3ch = cv2.cvtColor(mask_512, cv2.COLOR_GRAY2BGR)
+
     input_data = {
         "img_prompt": img_prompt,
         "text_prompt": text_prompt,
         "seed": args.seed,
-        "draw_pos": mask_512[..., None] if mask_512.ndim == 2 else mask_512,
+        "draw_pos": mask_512_3ch,
         "ori_image": ref_512[..., ::-1],  # BGR to RGB
     }
 
@@ -322,12 +324,17 @@ def main():
     print(f"  Seed:           {args.seed}")
     print(f"  Font Mimic:     DISABLED")
 
+    import torch
+
     t_infer_start = time.time()
-    results, rtn_code, rtn_warning, debug_info = model(input_data, **forward_params)
+    with torch.no_grad():
+        results, rtn_code, rtn_warning, debug_info = model(input_data, **forward_params)
     t_infer = time.time() - t_infer_start
     print(f"  -> Inference completed in {t_infer:.2f}s (rtn_code={rtn_code})")
     if rtn_warning:
         print(f"  -> Warning: {rtn_warning}")
+    if rtn_code < 0:
+        raise RuntimeError(f"AnyText2 inference failed: {rtn_warning}")
 
     os.chdir(curr_cwd)
 
