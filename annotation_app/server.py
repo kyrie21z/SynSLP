@@ -8,15 +8,58 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import struct
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
-from PIL import Image
 
 from annotation_app.store import AnnotationStore
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def get_image_size(path: Path) -> tuple[int, int]:
+    """Extract (width, height) using PIL if available, falling back to stdlib struct parsing."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return im.size
+    except ImportError:
+        pass
+
+    try:
+        with open(path, "rb") as f:
+            head = f.read(32)
+            if head.startswith(b"\x89PNG\r\n\x1a\n"):
+                w, h = struct.unpack(">II", head[16:24])
+                return w, h
+            elif head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+                w, h = struct.unpack("<HH", head[6:10])
+                return w, h
+            elif head.startswith(b"BM"):
+                w, h = struct.unpack("<II", head[18:26])
+                return abs(w), abs(h)
+            elif head.startswith(b"\xff\xd8"):  # JPEG
+                f.seek(0)
+                f.read(2)
+                b = f.read(1)
+                while b:
+                    while b != b"\xff":
+                        b = f.read(1)
+                    while b == b"\xff":
+                        b = f.read(1)
+                    if 0xc0 <= b[0] <= 0xc3 or 0xc9 <= b[0] <= 0xcb:
+                        f.read(3)
+                        h, w = struct.unpack(">HH", f.read(4))
+                        return w, h
+                    else:
+                        block_len = struct.unpack(">H", f.read(2))[0]
+                        f.seek(block_len - 2, 1)
+                    b = f.read(1)
+    except Exception:
+        pass
+    return (0, 0)
 
 
 class AnnotationServer(ThreadingHTTPServer):
@@ -133,8 +176,7 @@ class AnnotationHandler(BaseHTTPRequestHandler):
                 record = self.server.store.get(img_rel)
                 if record is None:
                     # Get image dimensions from disk
-                    with Image.open(img_abs) as im:
-                        w, h = im.size
+                    w, h = get_image_size(img_abs)
                     record = {
                         "image": img_rel,
                         "width": w,
@@ -168,8 +210,7 @@ class AnnotationHandler(BaseHTTPRequestHandler):
                 # Always derive width and height directly from disk image if available
                 img_abs = (self.server.image_dir.parent / img_path).resolve()
                 if img_abs.exists() and img_abs.is_file():
-                    with Image.open(img_abs) as im:
-                        width, height = im.size
+                    width, height = get_image_size(img_abs)
                 elif not width or not height:
                     self.send_json(400, {"error": f"Image not found and no dimensions provided: {img_path}"})
                     return
