@@ -14,7 +14,11 @@ from PIL import Image
 
 from annotation_app.server import create_server
 from annotation_app.store import AnnotationStore
-from scripts.generate_character_masks import generate_mask_for_chars
+from scripts.generate_character_masks import (
+    generate_mask_for_chars,
+    generate_mask_for_orders,
+    load_annotation,
+)
 
 
 class TestAnnotationStore(unittest.TestCase):
@@ -160,7 +164,7 @@ class TestAnnotationServer(unittest.TestCase):
 
 
 class TestMaskGeneration(unittest.TestCase):
-    def test_generate_masks(self):
+    def test_legacy_generate_masks(self):
         record = {
             "image": "reference/dongtai.jpg",
             "width": 239,
@@ -186,6 +190,92 @@ class TestMaskGeneration(unittest.TestCase):
         # Mask "东泰168"
         mask_all, boxes_all = generate_mask_for_chars(record, "东泰168")
         self.assertEqual(len(boxes_all), 5)
+
+    def test_order_based_selection_dongtai168(self):
+        # Load verified human GT annotation for 东泰168
+        jsonl_path = Path(__file__).resolve().parent.parent / "annotations" / "character_annotations.jsonl"
+        record = load_annotation(jsonl_path, "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg")
+
+        mask_img, boxes = generate_mask_for_orders(record, [2])
+        self.assertEqual(mask_img.size, (239, 57))
+        self.assertEqual(len(boxes), 1)
+
+        ord_val, text, bbox = boxes[0]
+        self.assertEqual(ord_val, 2)
+        self.assertEqual(text, "1")
+        self.assertEqual(bbox, [120, 3, 147, 52])
+
+        # Active pixels in original 239x57 mask
+        raw_bytes = mask_img.tobytes()
+        active_px = sum(1 for b in raw_bytes if b > 0)
+        expected_px = (147 - 120) * (52 - 3)  # 27 * 49 = 1323
+        self.assertEqual(expected_px, 1323)
+        self.assertEqual(active_px, 1323)
+
+    def test_duplicate_character_order_safety(self):
+        # SLP with duplicate characters: e.g. "苏A001" where '0' appears twice at orders 2 and 3
+        dup_record = {
+            "image": "test_dup.jpg",
+            "width": 200,
+            "height": 50,
+            "instances": [
+                {"bbox": [10, 10, 30, 40], "text": "苏", "order": 0},
+                {"bbox": [35, 10, 55, 40], "text": "A", "order": 1},
+                {"bbox": [60, 10, 80, 40], "text": "0", "order": 2},
+                {"bbox": [85, 10, 105, 40], "text": "0", "order": 3},
+                {"bbox": [110, 10, 130, 40], "text": "1", "order": 4},
+            ],
+        }
+
+        # Select only order 2 ('0')
+        mask2, boxes2 = generate_mask_for_orders(dup_record, [2])
+        self.assertEqual(len(boxes2), 1)
+        self.assertEqual(boxes2[0][0], 2)
+        self.assertEqual(boxes2[0][1], "0")
+        self.assertEqual(boxes2[0][2], [60, 10, 80, 40])
+        raw_bytes2 = mask2.tobytes()
+        active2 = sum(1 for b in raw_bytes2 if b > 0)
+        self.assertEqual(active2, 20 * 30)  # 600 px
+
+        # Select only order 3 ('0')
+        mask3, boxes3 = generate_mask_for_orders(dup_record, [3])
+        self.assertEqual(len(boxes3), 1)
+        self.assertEqual(boxes3[0][0], 3)
+        self.assertEqual(boxes3[0][1], "0")
+        self.assertEqual(boxes3[0][2], [85, 10, 105, 40])
+        raw_bytes3 = mask3.tobytes()
+        active3 = sum(1 for b in raw_bytes3 if b > 0)
+        self.assertEqual(active3, 20 * 30)  # 600 px
+
+        # Verify pixels do not overlap
+        overlap = sum(1 for b2, b3 in zip(raw_bytes2, raw_bytes3) if b2 > 0 and b3 > 0)
+        self.assertEqual(overlap, 0)
+
+    def test_order_validation_errors(self):
+        # 1. Missing order
+        record = {
+            "image": "test.jpg",
+            "width": 100,
+            "height": 50,
+            "instances": [{"bbox": [10, 10, 30, 40], "text": "A", "order": 0}],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            generate_mask_for_orders(record, [99])
+        self.assertIn("not found", str(ctx.exception))
+
+        # 2. Duplicate order in record
+        bad_record = {
+            "image": "bad.jpg",
+            "width": 100,
+            "height": 50,
+            "instances": [
+                {"bbox": [10, 10, 30, 40], "text": "A", "order": 0},
+                {"bbox": [40, 10, 60, 40], "text": "B", "order": 0},
+            ],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            generate_mask_for_orders(bad_record, [0])
+        self.assertIn("Duplicate order", str(ctx.exception))
 
 
 if __name__ == "__main__":
