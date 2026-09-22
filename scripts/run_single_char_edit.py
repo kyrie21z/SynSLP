@@ -73,6 +73,12 @@ def parse_args():
         default="a realistic photo of a Chinese ship license plate",
         help="Baseline image prompt text for comparison board legend",
     )
+    parser.add_argument(
+        "--font_mimic",
+        action="store_true",
+        default=False,
+        help="Enable native AnyText2 Font Mimic conditioning using source glyph",
+    )
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--ddim_steps", type=int, default=20)
     parser.add_argument("--strength", type=float, default=1.0)
@@ -306,6 +312,95 @@ def create_prompt_ab_comparison_board(
     print(f"Saved prompt A/B comparison board: {output_path} ({final_board.shape[1]}x{final_board.shape[0]})")
 
 
+def create_font_mimic_ab_comparison_board(
+    ref_orig: np.ndarray,
+    baseline_orig: np.ndarray,
+    font_mimic_orig: np.ndarray,
+    output_path: Path,
+    bbox: list[int] = [120, 3, 147, 52],
+):
+    """
+    Generate Font Mimic A/B comparison board showing:
+    1. Full-plate crops (3x scale) for:
+       - 1. Reference: 东泰168
+       - 2. Condition A: Painted Hull + Font Mimic OFF
+       - 3. Condition B: Painted Hull + Font Mimic ON
+    2. Zoomed-in glyph region around order-2 bbox (6x scale):
+       - Reference Source Glyph '1' (Style Hint)
+       - Condition A Glyph '2' (Font Mimic OFF)
+       - Condition B Glyph '2' (Font Mimic ON)
+    3. Bottom text legend with hypothesis, conditions, and parameter verification.
+    """
+    scale_full = 3
+    h, w = ref_orig.shape[:2]
+    disp_w = w * scale_full
+    disp_h = h * scale_full
+
+    col1 = cv2.resize(ref_orig, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
+    col2 = cv2.resize(baseline_orig, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
+    col3 = cv2.resize(font_mimic_orig, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
+
+    c1 = render_header_card(col1, "1. Reference: 东泰168")
+    c2 = render_header_card(col2, "2. Condition A (Font Mimic OFF)")
+    c3 = render_header_card(col3, "3. Condition B (Font Mimic ON)")
+    row_full = np.hstack([c1, c2, c3])
+
+    # Zoomed-in crop around order-2 glyph
+    pad_x = 18
+    x1 = max(0, bbox[0] - pad_x)
+    x2 = min(w, bbox[2] + pad_x)
+    y1 = 0
+    y2 = h
+
+    crop_ref = ref_orig[y1:y2, x1:x2]
+    crop_base = baseline_orig[y1:y2, x1:x2]
+    crop_fm = font_mimic_orig[y1:y2, x1:x2]
+
+    target_crop_w = row_full.shape[1] // 3
+    crop_scale = target_crop_w / (x2 - x1)
+    target_crop_h = int(round((y2 - y1) * crop_scale))
+
+    z1_img = cv2.resize(crop_ref, (target_crop_w, target_crop_h), interpolation=cv2.INTER_NEAREST)
+    z2_img = cv2.resize(crop_base, (target_crop_w, target_crop_h), interpolation=cv2.INTER_NEAREST)
+    z3_img = cv2.resize(crop_fm, (target_crop_w, target_crop_h), interpolation=cv2.INTER_NEAREST)
+
+    z1 = render_header_card(z1_img, "Reference Source Glyph '1' (Style Hint)")
+    z2 = render_header_card(z2_img, "Condition A: Glyph '2' (Font Mimic OFF)")
+    z3 = render_header_card(z3_img, "Condition B: Glyph '2' (Font Mimic ON)")
+    row_zoom = np.hstack([z1, z2, z3])
+
+    # Text legend at bottom
+    banner_w = row_full.shape[1]
+    banner_h = 100
+    banner = np.full((banner_h, banner_w, 3), (25, 25, 25), dtype=np.uint8)
+    banner_pil = Image.fromarray(cv2.cvtColor(banner, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(banner_pil)
+    font = None
+    for fc in [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/home/kyrie/.local/share/fonts/kymcm-lite/noto/NotoSerifCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    ]:
+        if os.path.exists(fc):
+            try:
+                font = ImageFont.truetype(fc, 15)
+                break
+            except Exception:
+                pass
+    if font is not None:
+        draw.text((15, 10), "[Hypothesis]: Can native Font Mimic improve stroke/style consistency when source hint is glyph '1'?", font=font, fill=(255, 220, 160))
+        draw.text((15, 40), "[Condition A]: Painted Hull Prompt, Font Mimic OFF", font=font, fill=(180, 200, 255))
+        draw.text((15, 70), "[Condition B]: Painted Hull Prompt, Font Mimic ON (Hint Image: 512x512 Ref, Hint Mask: Order-2 Glyph '1')", font=font, fill=(160, 255, 180))
+    banner = cv2.cvtColor(np.array(banner_pil), cv2.COLOR_RGB2BGR)
+
+    sep1 = np.full((12, banner_w, 3), (15, 15, 15), dtype=np.uint8)
+    sep2 = np.full((12, banner_w, 3), (15, 15, 15), dtype=np.uint8)
+
+    final_board = np.vstack([row_full, sep1, row_zoom, sep2, banner])
+    cv2.imwrite(str(output_path), final_board)
+    print(f"Saved Font Mimic A/B comparison board: {output_path} ({final_board.shape[1]}x{final_board.shape[0]})")
+
+
 def main():
     args = parse_args()
     output_dir = args.output_dir.resolve()
@@ -431,8 +526,8 @@ def main():
         "lora_path_ratio": "",
         "glyline_font_path": ["None"] * 5,
         "text_colors": "500,500,500 500,500,500 500,500,500 500,500,500 500,500,500",
-        "font_hint_image": [None] * 5,
-        "font_hint_mask": [None] * 5,
+        "font_hint_image": [ref_512[..., ::-1], None, None, None, None] if args.font_mimic else [None] * 5,
+        "font_hint_mask": [mask_512, None, None, None, None] if args.font_mimic else [None] * 5,
     }
 
     print("\n[Step 4] Running AnyText2 Edit Inference...")
@@ -443,7 +538,7 @@ def main():
     print(f"  DDIM Steps:     {args.ddim_steps}")
     print(f"  Strength:       {args.strength}")
     print(f"  Seed:           {args.seed}")
-    print(f"  Font Mimic:     DISABLED")
+    print(f"  Font Mimic:     {'ENABLED (Source Hint: glyph ' + src_text + ')' if args.font_mimic else 'DISABLED'}")
 
     import torch
 
@@ -463,8 +558,10 @@ def main():
     out_512_rgb = results[0]
     out_512_bgr = out_512_rgb[..., ::-1]
 
-    out_512_path = output_dir / "output_512.png"
+    out_512_path = output_dir / ("font_mimic_output_512.png" if args.font_mimic else "output_512.png")
     cv2.imwrite(str(out_512_path), out_512_bgr)
+    if args.font_mimic:
+        shutil.copy2(out_512_path, output_dir / "output_512.png")
     print(f"\n[Step 5] Saved 512x512 Output: {out_512_path}")
 
     # If debug glyph control image is present
@@ -475,8 +572,10 @@ def main():
 
     # Invert letterbox back to original 239x57
     out_orig_bgr = invert_letterbox(out_512_bgr, geo_info)
-    out_orig_path = output_dir / "output_crop_original_res.png"
+    out_orig_path = output_dir / ("font_mimic_output_crop_original_res.png" if args.font_mimic else "output_crop_original_res.png")
     cv2.imwrite(str(out_orig_path), out_orig_bgr)
+    if args.font_mimic:
+        shutil.copy2(out_orig_path, output_dir / "output_crop_original_res.png")
     print(f"  -> Inverted Letterbox Crop: {out_orig_path} ({out_orig_bgr.shape[1]}x{out_orig_bgr.shape[0]})")
 
     # 6. Generate Side-by-Side Comparison Board
@@ -496,21 +595,32 @@ def main():
         baseline_crop_path = Path(args.baseline_crop).resolve()
         baseline_orig_img = cv2.imread(str(baseline_crop_path))
         if baseline_orig_img is not None:
-            ab_comp_path = output_dir / "comparison_prompt_ab.png"
-            create_prompt_ab_comparison_board(
-                ref_orig=ref_orig,
-                baseline_orig=baseline_orig_img,
-                ablation_orig=out_orig_bgr,
-                baseline_prompt=args.baseline_prompt,
-                ablation_prompt=img_prompt,
-                output_path=ab_comp_path,
-                bbox=bbox,
-            )
+            if args.font_mimic:
+                ab_comp_path = output_dir / "comparison_font_mimic_ab.png"
+                create_font_mimic_ab_comparison_board(
+                    ref_orig=ref_orig,
+                    baseline_orig=baseline_orig_img,
+                    font_mimic_orig=out_orig_bgr,
+                    output_path=ab_comp_path,
+                    bbox=bbox,
+                )
+            else:
+                ab_comp_path = output_dir / "comparison_prompt_ab.png"
+                create_prompt_ab_comparison_board(
+                    ref_orig=ref_orig,
+                    baseline_orig=baseline_orig_img,
+                    ablation_orig=out_orig_bgr,
+                    baseline_prompt=args.baseline_prompt,
+                    ablation_prompt=img_prompt,
+                    output_path=ab_comp_path,
+                    bbox=bbox,
+                )
             ab_comp_name = str(ab_comp_path.name)
 
     # 7. Write metadata
+    task_name = "single_glyph_font_mimic_ablation" if args.font_mimic else ("single_character_edit_prompt_ablation" if ab_comp_name else "single_character_edit")
     metadata = {
-        "task": "single_character_edit_prompt_ablation" if ab_comp_name else "single_character_edit",
+        "task": task_name,
         "reference_image": str(args.image),
         "original_dimensions": [orig_w, orig_h],
         "selected_order": args.order,
@@ -533,7 +643,7 @@ def main():
             "text_prompt": text_prompt,
             "a_prompt": a_prompt,
             "n_prompt": n_prompt,
-            "font_mimic": False,
+            "font_mimic": args.font_mimic,
         },
         "output_files": {
             "reference_original": str(ref_orig_path.name),
@@ -546,13 +656,29 @@ def main():
         },
     }
 
+    if args.font_mimic:
+        metadata["font_hint_details"] = {
+            "source_order": args.order,
+            "source_glyph": src_text,
+            "active_slot": 0,
+            "font_hint_image_shape": [512, 512, 3],
+            "font_hint_image_dtype": "uint8",
+            "font_hint_image_channels": "RGB",
+            "font_hint_mask_shape": [512, 512],
+            "font_hint_mask_dtype": "uint8",
+            "font_hint_mask_active_pixels": int(np.sum(mask_512 > 0)),
+        }
+        metadata["output_files"]["font_mimic_output_512"] = "font_mimic_output_512.png"
+        metadata["output_files"]["font_mimic_output_crop_original_res"] = "font_mimic_output_crop_original_res.png"
+        metadata["output_files"]["comparison_font_mimic_ab"] = "comparison_font_mimic_ab.png"
+
     if ab_comp_name:
-        metadata["output_files"]["comparison_prompt_ab"] = ab_comp_name
+        metadata["output_files"][ab_comp_name.replace(".png", "")] = ab_comp_name
         metadata["ablation_details"] = {
-            "hypothesis": "Test if visible rectangular patch around generated digit is caused by physical license plate prior",
-            "controlled_variable": "img_prompt",
-            "baseline_img_prompt": args.baseline_prompt,
-            "ablation_img_prompt": img_prompt,
+            "hypothesis": "Can AnyText2 native Font Mimic make generated 2 visually closer to original SLP glyph style when source hint is glyph 1?" if args.font_mimic else "Test if visible rectangular patch around generated digit is caused by physical license plate prior",
+            "controlled_variable": "font_mimic (OFF -> ON)" if args.font_mimic else "img_prompt",
+            "baseline_condition": "Painted Hull Prompt, Font Mimic OFF" if args.font_mimic else args.baseline_prompt,
+            "ablation_condition": "Painted Hull Prompt, Font Mimic ON" if args.font_mimic else img_prompt,
             "frozen_parameters_identical_proof": {
                 "seed": args.seed == 2026,
                 "ddim_steps": args.ddim_steps == 20,
@@ -560,7 +686,6 @@ def main():
                 "cfg_scale": args.cfg_scale == 7.5,
                 "order": args.order == 2,
                 "bbox": bbox == [120, 3, 147, 52],
-                "font_mimic": False,
             },
         }
 
