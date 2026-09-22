@@ -78,11 +78,11 @@ Canonical JSONL file: `annotations/character_annotations.jsonl`
   "width": 239,
   "height": 57,
   "instances": [
-    {"bbox": [5, 8, 45, 54], "text": "东", "order": 0},
-    {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1},
-    {"bbox": [125, 7, 139, 51], "text": "1", "order": 2},
-    {"bbox": [158, 7, 183, 56], "text": "6", "order": 3},
-    {"bbox": [204, 7, 229, 52], "text": "8", "order": 4}
+    {"bbox": [2, 6, 47, 55], "text": "东", "order": 0},
+    {"bbox": [56, 5, 103, 55], "text": "泰", "order": 1},
+    {"bbox": [120, 3, 147, 52], "text": "1", "order": 2},
+    {"bbox": [157, 4, 184, 53], "text": "6", "order": 3},
+    {"bbox": [203, 4, 231, 53], "text": "8", "order": 4}
   ]
 }
 ```
@@ -140,20 +140,20 @@ Demonstrated that character annotations directly produce clean binary masks in o
 
 | Target Selection | Matched Boxes | Active Pixels | Total Pixels | Mask Percentage | Output File |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| `1` | 1 | 616 | 13,623 | 4.52% | `outputs/character_masks/mask_1.png` |
-| `泰` | 1 | 1,833 | 13,623 | 13.46% | `outputs/character_masks/mask_泰.png` |
-| `泰168` | 4 | 4,799 | 13,623 | 35.23% | `outputs/character_masks/mask_泰168.png` |
-| `东泰168` | 5 | 6,639 | 13,623 | 48.73% | `outputs/character_masks/mask_东泰168.png` |
+| `1` | 1 | 1,323 | 13,623 | 9.71% | `outputs/character_masks/mask_1.png` |
+| `泰` | 1 | 2,350 | 13,623 | 17.25% | `outputs/character_masks/mask_泰.png` |
+| `泰168` | 4 | 6,368 | 13,623 | 46.74% | `outputs/character_masks/mask_泰168.png` |
+| `东泰168` | 5 | 8,573 | 13,623 | 62.93% | `outputs/character_masks/mask_东泰168.png` |
 
 ### 4. Server Synchronization Evidence
 
 - Executed: `bash scripts/sync_annotations_to_server.sh`
-- Local file: `/home/kyrie/cxprojects/SynSLP/annotations/character_annotations.jsonl` (398 bytes)
+- Local file: `/home/kyrie/cxprojects/SynSLP/annotations/character_annotations.jsonl` (399 bytes)
 - Server target: `server-zyx:/mnt/data/zyx/SynSLP/annotations/character_annotations.jsonl`
 - Verification on `server-zyx`:
   ```bash
   $ ssh server-zyx "cat /mnt/data/zyx/SynSLP/annotations/character_annotations.jsonl"
-  {"image": "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg", "width": 239, "height": 57, "instances": [{"bbox": [5, 8, 45, 54], "text": "东", "order": 0}, {"bbox": [56, 8, 95, 55], "text": "泰", "order": 1}, {"bbox": [125, 7, 139, 51], "text": "1", "order": 2}, {"bbox": [158, 7, 183, 56], "text": "6", "order": 3}, {"bbox": [204, 7, 229, 52], "text": "8", "order": 4}]}
+  {"image": "reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg", "width": 239, "height": 57, "instances": [{"bbox": [2, 6, 47, 55], "text": "东", "order": 0}, {"bbox": [56, 5, 103, 55], "text": "泰", "order": 1}, {"bbox": [120, 3, 147, 52], "text": "1", "order": 2}, {"bbox": [157, 4, 184, 53], "text": "6", "order": 3}, {"bbox": [203, 4, 231, 53], "text": "8", "order": 4}]}
   ```
 - File contents verified identical.
 
