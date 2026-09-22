@@ -5,12 +5,21 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANYTEXT2_DIR="$ROOT_DIR/third_party/AnyText2"
 ENV_NAME="anytext2"
 
+if ! command -v conda >/dev/null 2>&1; then
+  for candidate in "/mnt/data/zyx/miniconda3/bin" "$HOME/miniconda3/bin" "$HOME/anaconda3/bin"; do
+    if [[ -x "$candidate/conda" ]]; then
+      export PATH="$candidate:$PATH"
+      break
+    fi
+  done
+fi
+
 [[ -d "$ANYTEXT2_DIR" ]] || { echo "ERROR: $ANYTEXT2_DIR not found. Run scripts/setup_anytext2.sh first."; exit 1; }
 [[ -f "$ANYTEXT2_DIR/models/anytext_v2.0.ckpt" ]] || { echo "ERROR: AnyText2 checkpoint not found."; exit 1; }
 
 cd "$ANYTEXT2_DIR"
 
-conda run -n "$ENV_NAME" python - <<'PY'
+conda run --no-capture-output -n "$ENV_NAME" python - <<'PY'
 import torch
 
 print(f"torch={torch.__version__}")

@@ -5,6 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANYTEXT2_DIR="$ROOT_DIR/third_party/AnyText2"
 ENV_NAME="anytext2"
 
+if ! command -v conda >/dev/null 2>&1; then
+  for candidate in "/mnt/data/zyx/miniconda3/bin" "$HOME/miniconda3/bin" "$HOME/anaconda3/bin"; do
+    if [[ -x "$candidate/conda" ]]; then
+      export PATH="$candidate:$PATH"
+      break
+    fi
+  done
+fi
+
 [[ -d "$ANYTEXT2_DIR" ]] || { echo "ERROR: $ANYTEXT2_DIR not found. Run scripts/setup_anytext2.sh first."; exit 1; }
 
 cd "$ANYTEXT2_DIR"

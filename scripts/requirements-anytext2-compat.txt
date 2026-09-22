@@ -1,0 +1,20 @@
+# SynSLP AnyText2 Verified Compatibility Package Pins
+# Tested on Python 3.10 with PyTorch 2.1.0+cu121 on NVIDIA GeForce RTX 4090
+
+# Build and C extensions compatibility
+setuptools==69.5.1
+numpy==1.24.4
+Pillow==9.5.0
+opencv-python==4.7.0.72
+
+# Deep learning framework and pipeline compatibility
+pytorch-lightning==1.9.5
+diffusers==0.10.2
+huggingface-hub==0.25.2
+tokenizers==0.15.2
+transformers==4.38.2
+
+# Upstream runtime dependencies
+opencc==1.4.2
+datasets>=2.14.0
+modelscope>=1.23.0

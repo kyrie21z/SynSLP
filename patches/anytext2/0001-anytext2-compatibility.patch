@@ -1,0 +1,26 @@
+diff --git a/ldm/modules/attention.py b/ldm/modules/attention.py
+index 2ae1fb8..e20c452 100644
+--- a/ldm/modules/attention.py
++++ b/ldm/modules/attention.py
+@@ -187,7 +187,7 @@ class CrossAttention(nn.Module):
+             sim.masked_fill_(~mask, max_neg_value)
+ 
+         # attention, what we cannot get enough of
+-        sim = sim.softmax(dim=-1)
++        sim = sim.softmax(dim=-1).to(v.dtype)
+ 
+         out = einsum('b i j, b j d -> b i d', sim, v)
+         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+diff --git a/ms_wrapper.py b/ms_wrapper.py
+index 5184798..16a773d 100644
+--- a/ms_wrapper.py
++++ b/ms_wrapper.py
+@@ -367,6 +367,8 @@ class AnyText2Model(TorchModel):
+             fir, sec = 1, 0  # top-down first
+         elif sort_priority == '↔':
+             fir, sec = 0, 1  # left-right first
++        else:
++            fir, sec = 0, 1  # default left-right
+         components.sort(key=lambda c: (c[1][fir]//gap, c[1][sec]//gap))
+         sorted_components = [c[0] for c in components]
+         return sorted_components
