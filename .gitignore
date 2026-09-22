@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local environments / caches
+.env
+.cache/
+.modelscope/
+
+# Third-party source and model weights
+third_party/
+
+# Generated artifacts
+outputs/
+SaveImages/
+*.ckpt
+*.safetensors
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
