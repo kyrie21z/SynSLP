@@ -1,6 +1,6 @@
-# Close AnyText2 deployment reproducibility gaps
+# Tune one AnyText2 SLP edit
 
-Updated: 2026-09-22T06:07:46.155Z
+Updated: 2026-09-22T08:31:41.548Z
 Workspace: /home/kyrie/cxprojects/SynSLP
 Target agent: Codex (codex)
 
@@ -8,117 +8,126 @@ Target agent: Codex (codex)
 
 # Goal
 
-Close the two remaining acceptance gaps from the previous AnyText2 deployment without expanding scope:
+Find a usable AnyText2 edit configuration for exactly one representative tight-crop SLP by isolating a single variable: edit strength.
 
-1. make the server-side AnyText2 compatibility fixes reproducible from repository-controlled deployment assets;
-2. restore final Git consistency so local HEAD == origin/main == server HEAD.
+Do not design a batch synthesis pipeline. Do not change reference image, mask, target text, seed, prompt, DDIM steps, CFG, model revision, or any other generation parameter across the comparison.
 
-Do not add batch synthesis, OCR filtering, Qwen, model comparison, training, or dataset-generation logic.
+## Fixed inputs
 
-## 1. Capture the exact deployed compatibility delta
+Server:
+- host: server-zyx
+- repo: /mnt/data/zyx/SynSLP
 
-Current known deployment:
-- SynSLP local: /home/kyrie/cxprojects/SynSLP
-- SynSLP server: server-zyx:/mnt/data/zyx/SynSLP
-- AnyText2 upstream commit: b06c583a583818f3679665ef67b51363f107853c
-- AnyText2 server checkout: /mnt/data/zyx/SynSLP/third_party/AnyText2
-- conda env: anytext2
+Reference:
+- /mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg
 
-Known manual compatibility fixes from the completed deployment:
-- setuptools 69.5.1 / setuptools<70
-- numpy==1.24.4
-- pytorch-lightning==1.9.5 / <2.0
-- Pillow==9.5.0
-- ldm/modules/attention.py: cast softmax similarity to v.dtype in fallback CrossAttention
-- ms_wrapper.py: defensive sort_priority fallback used by the working server deployment
+Mask:
+- /mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png
 
-Actions:
-- Inspect the actual server AnyText2 git diff against the pinned upstream commit.
-- Inspect the actual installed versions in the working anytext2 environment.
-- Treat the working server deployment as the source of truth for compatibility changes; do not invent additional patches.
-- Reduce the captured delta to only what is required for the verified deployment.
+Target text:
+- 苏航268
 
-Acceptance:
-- exact source-code delta and package-version delta are known and reviewable before changing deployment automation.
+Generator:
+- existing verified AnyText2 deployment
+- keep the currently pinned AnyText2 revision and working FP16 environment unchanged
 
-## 2. Encode reproducibility in SynSLP
+## 1. Validate the two fixed inputs before inference
 
-Make the smallest repository-controlled change that can recreate the working deployment.
+On server:
+- confirm both files exist and are readable;
+- record reference width/height;
+- record mask width/height and verify it matches the reference exactly;
+- verify the mask is effectively binary and determine which value is treated by the current AnyText2 path as editable;
+- do not redraw, resize, blur, dilate, erode, or otherwise alter the user's mask unless the existing AnyText2 API itself requires a deterministic format conversion;
+- if conversion to 3-channel/binary uint8 is required, do only that in memory and record it.
 
-Preferred structure:
-- store the minimal AnyText2 source compatibility patch under a tracked path such as patches/anytext2/;
-- encode required compatibility package pins in a tracked file or directly in setup_anytext2.sh;
-- keep third_party/, checkpoints, caches, outputs, and the conda environment untracked.
+Stop if dimensions or mask semantics are invalid rather than silently repairing them.
 
-Update scripts/setup_anytext2.sh so that a fresh deployment deterministically:
-1. clones/fetches AnyText2;
-2. checks out the pinned upstream commit;
-3. creates/updates the isolated conda environment from upstream environment.yaml;
-4. enforces only the compatibility package pins proven necessary by the working deployment;
-5. applies the tracked compatibility patch idempotently;
-6. downloads/verifies the official iic/cv_anytext2 checkpoint;
-7. fails clearly on patch/version mismatch instead of silently continuing.
+## 2. Create the smallest single-image tuning entry point
 
-Constraints:
-- do not vendor AnyText2 source into SynSLP;
-- do not modify model architecture or inference behavior beyond the already-proven compatibility fixes;
-- do not rely on undocumented manual edits after setup;
-- preserve existing script behavior where it already works;
-- keep the patch tied to the pinned AnyText2 commit.
+Reuse the already verified AnyText2 loading/inference path rather than creating a new abstraction layer.
 
-## 3. Verify reproducibility without disturbing the working deployment
+Implement only what is necessary to run the fixed reference + fixed mask + fixed target repeatedly with a configurable strength.
 
-Do not destroy or reset the verified anytext2 environment/checkpoint.
+Requirements:
+- reference and mask paths are explicit CLI/config inputs or fixed in a dedicated tuning script;
+- target text is exactly 苏航268;
+- mode remains edit;
+- keep the same seed for all runs;
+- keep identical prompt, negative prompt, DDIM steps, CFG, sort priority, resolution policy, and all other parameters for all runs;
+- do not introduce OCR filtering, manifest generation, sampling logic, multiprocessing, or batch infrastructure.
 
-Minimum sufficient verification:
-- syntax/static check of changed deployment scripts;
-- prove the tracked patch cleanly applies to a fresh checkout of the pinned AnyText2 commit;
-- prove the encoded dependency constraints resolve to the intended compatibility versions;
-- if practical with the existing server resources, use an isolated disposable validation environment/name rather than modifying the working anytext2 environment;
-- run the existing check/smoke path against the resulting reproducible deployment when feasible.
+Before running, inspect the current AnyText2 wrapper to ensure the external mask is passed with the correct polarity/shape and that the `strength` argument used here is the actual edit-strength control in the working inference path.
 
-Required functional acceptance remains:
-- checkpoint loads;
-- CUDA + FP16 works;
-- stock inference produces an image;
-- Chinese + digits SLP reference edit produces an image.
+## 3. Run exactly four strength values
 
-If a full disposable reinstall is disproportionately expensive, do not fake it:
-- explicitly record which parts were independently recreated;
-- at minimum require fresh-checkout patch application plus dependency-version verification plus rerun of the existing working smoke test.
+Generate one output for each:
 
-## 4. Commit, push, and re-sync server
+- strength = 0.3
+- strength = 0.5
+- strength = 0.7
+- strength = 1.0
 
-After reproducibility changes pass:
-- commit only the intended tracked SynSLP changes;
-- push main to origin;
-- update server-zyx:/mnt/data/zyx/SynSLP from origin/main using normal Git synchronization;
-- preserve untracked third_party/checkpoints/outputs and the working conda environment;
-- do not hard reset, force push, or delete deployment artifacts.
+All non-strength variables must be byte-for-byte/config-identical across the four runs where applicable.
 
-Final acceptance:
-- local working tree clean;
-- server working tree clean for tracked files;
-- local HEAD == origin/main == server HEAD;
-- setup assets contain all compatibility steps required by the verified AnyText2 deployment;
-- existing AnyText2 smoke test still passes after the tracked changes.
+Use one deterministic seed for all four outputs.
+
+Write outputs under a dedicated directory such as:
+
+/mnt/data/zyx/SynSLP/outputs/single_image_tuning/dongtai168/
+
+Use unambiguous filenames, e.g.:
+- strength_0.3.png
+- strength_0.5.png
+- strength_0.7.png
+- strength_1.0.png
+
+Also save/copy the exact reference and mask used into that experiment directory only if needed for human review; do not modify the originals.
+
+## 4. Produce review evidence, then stop
+
+Record:
+- exact reference path;
+- exact mask path;
+- target text;
+- seed;
+- fixed generation parameters;
+- four strength values;
+- output paths;
+- inference time for each output;
+- any model warnings/errors.
+
+If practical, create one simple side-by-side comparison image containing:
+- reference;
+- strength 0.3;
+- strength 0.5;
+- strength 0.7;
+- strength 1.0.
+
+Do not score or auto-select a winner. The user will visually judge:
+1. whether the text is actually 苏航268;
+2. whether the original SLP style is preserved;
+3. whether glyphs/digits look natural;
+4. whether the whole image still looks like a real SLP.
 
 ## Stop condition
 
-Stop once both original gaps are closed and evidenced:
-1. clean deployment reproducibility is encoded and verified to the extent stated above;
-2. all three Git endpoints are on the same final commit.
+Stop immediately after the four outputs and review evidence are produced.
 
-Record in .ai-bridge/agent-status.md:
-- final commit SHA on local/origin/server;
-- tracked files added/changed;
-- exact compatibility patch contents;
-- exact dependency pins;
-- verification commands and results;
-- whether verification used a fresh disposable environment or only fresh-checkout + dependency checks;
-- any residual reproducibility limitation.
+Out of scope:
+- changing the mask;
+- changing the reference;
+- trying additional target strings;
+- seed sweep;
+- prompt sweep;
+- font/style conditioning experiments;
+- OCR verification;
+- batch generation;
+- synthetic-data pipeline;
+- Qwen comparison;
+- downstream SLPR training.
 
-Do not proceed to synthetic-data pipeline design or generation.
+Update .ai-bridge/agent-status.md with the exact parameters and output paths for review.
 
 ## Implementation contract
 

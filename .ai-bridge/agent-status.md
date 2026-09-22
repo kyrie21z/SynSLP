@@ -1,94 +1,77 @@
-# Agent Status: SynSLP AnyText2 Deployment & Multi-End Sync
+# Agent Status: AnyText2 Single-Image SLP Edit Strength Tuning
 
-Updated: 2026-09-22T06:25:00.000Z
-Status: COMPLETED (REPRODUCIBILITY GAPS CLOSED & 3-END GIT SYNCHRONIZED)
+Updated: 2026-09-22T08:38:00.000Z
+Status: COMPLETED (REVIEW EVIDENCE READY)
 
 ## Overview
-Successfully executed all requirements defined in `.ai-bridge/current-plan.md` using the RGSLPR-compatible SSH approach (`ssh -o ClearAllForwardings=yes server-zyx`):
-1. **Reproducibility Gaps Closed**: Encoded all server compatibility fixes and dependency pins into repository-tracked assets.
-2. **Deterministic Setup Automation**: Updated `scripts/setup_anytext2.sh` to clone/checkout pinned commit `b06c583`, apply compatibility patch idempotently, ensure CUDA PyTorch, enforce pinned requirements, and download/verify ModelScope weights.
-3. **Multi-End Git Consistency**: Local working tree, GitHub `origin/main`, and `server-zyx` working tree are cleanly synchronized to the exact same commit.
-4. **End-to-End Verification**: Clean-checkout patch application, idempotent setup rerun, `check_anytext2.sh`, and full `smoke_test_anytext2.py` (stock edit + SLP edit) all verified passing on NVIDIA GeForce RTX 4090.
+Successfully executed all requirements in `.ai-bridge/current-plan.md` for single-image edit strength tuning on a representative tight-crop SLP:
+- Target SLP: `东泰168` -> `苏航268`
+- Isolated variable: Edit strength (`0.3`, `0.5`, `0.7`, `1.0`)
+- All other generation parameters (seed, prompt, negative prompt, steps, CFG scale, sort priority, resolution policy) strictly held identical across all 4 runs.
+- Generated individual outputs at both diffusion resolution (512x128) and original resolution (239x57).
+- Created a labeled vertical comparison grid for direct visual review.
 
 ---
 
-## 3-End Git Consistency
+## Fixed Inputs & Validation
 
-- **Commit**: `5763f231381eaaf554a3ba07f39352e9dce8813e` (and subsequent documentation commit)
-- **Local HEAD**: Matches `origin/main`
-- **GitHub origin/main**: Up to date
-- **server-zyx HEAD**: Matches `origin/main`
-- **Tracked Working Tree**: Clean on both local and `server-zyx`.
-- **Untracked Policy**: `third_party/`, `outputs/`, checkpoints, and conda environments remain properly untracked.
-
----
-
-## Tracked Reproducibility Assets Added/Updated
-
-### 1. `patches/anytext2/0001-anytext2-compatibility.patch`
-Minimal 2-hunk compatibility patch against upstream AnyText2 commit `b06c583a583818f3679665ef67b51363f107853c`:
-- `ldm/modules/attention.py`: Casts softmax similarity to `v.dtype` (`sim = sim.softmax(dim=-1).to(v.dtype)`) to eliminate `RuntimeError: expected scalar type Half but found Float` during FP16 inference in fallback `CrossAttention` without `xformers`.
-- `ms_wrapper.py`: Adds defensive default sort order (`fir, sec = 0, 1`) when `sort_priority` is neither `'↕'` nor `'↔'` to prevent unbound variable `NameError`.
-
-### 2. `scripts/requirements-anytext2-compat.txt`
-Strictly pins and constrains runtime packages verified on Python 3.10 with PyTorch 2.1.0+cu121:
-- `setuptools==69.5.1` (prevents `pkg_resources` removal in setuptools >= 70 from breaking `albumentations==0.4.3`)
-- `numpy==1.24.4` (prevents NumPy 2.x ABI incompatibility with PyTorch 2.1)
-- `Pillow==9.5.0` (prevents `font.getsize` removal in Pillow >= 10 from breaking `t3_dataset.py`)
-- `pytorch-lightning==1.9.5` (retains `pytorch_lightning.utilities.distributed.rank_zero_only` removed in 2.x)
-- `diffusers==0.10.2` & `huggingface-hub==0.25.2` (retains `cached_download` required by diffusers 0.10)
-- `tokenizers==0.15.2` & `transformers==4.38.2`
-- `opencv-python==4.7.0.72`
-- `opencc==1.4.2`, `datasets>=2.14.0`, `modelscope>=1.23.0`
-
-### 3. `scripts/setup_anytext2.sh`
-Automates deployment deterministically:
-- Non-interactive SSH conda path auto-discovery (`/mnt/data/zyx/miniconda3/bin`).
-- Clones upstream AnyText2 and detaches at pinned commit `b06c583a583818f3679665ef67b51363f107853c`.
-- Checks and idempotently applies `patches/anytext2/0001-anytext2-compatibility.patch` (`git apply --check` / `git apply -R --check`).
-- Creates conda env `anytext2` from `environment.yaml` if not present.
-- Verifies CUDA PyTorch 2.1.0+cu121 is active.
-- Enforces `scripts/requirements-anytext2-compat.txt`.
-- Downloads and verifies official ModelScope checkpoint `iic/cv_anytext2` (`anytext_v2.0.ckpt`).
-
-### 4. `scripts/check_anytext2.sh` & `scripts/run_anytext2_demo.sh`
-- Added non-interactive SSH conda auto-discovery.
-- Added `--no-capture-output` to stream Python logs directly without unbuffered stalling.
+- **Reference Image**: `/mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg`
+  - Dimensions: `239 x 57` (width=239, height=57, channels=3, uint8)
+- **Mask Image**: `/mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png`
+  - Dimensions: `239 x 57` (exact match with reference)
+  - Values: Binary `[0, 255]`
+  - Editable Text Area: `11960 / 13623` pixels (`87.79%`, value 255)
+- **Target Text**: `"苏航268"`
 
 ---
 
-## Verification Evidence
+## Resolution Policy & Technical Note
 
-### Verification Approach
-- **Patch Fresh Checkout Test**: Cloned a pristine AnyText2 repository at commit `b06c583a583818f3679665ef67b51363f107853c` into a temporary directory on `server-zyx`. Verified that `git apply --check` succeeds cleanly and `git apply -R --check` succeeds cleanly (idempotent).
-- **Dependency Version Verification**: Verified all installed packages against `requirements-anytext2-compat.txt`.
-- **Deployment Script Idempotency**: Executed `bash scripts/setup_anytext2.sh` on `server-zyx`; finished with exit code 0, recognized existing weights, and applied all checks.
-- **Model Check**: Executed `bash scripts/check_anytext2.sh` on `server-zyx`:
-  - `torch=2.1.0+cu121`, `cuda_available=True`
-  - `gpu=NVIDIA GeForce RTX 4090`, `vram_gb=47.36`
-  - Model weights loaded successfully, result `ANYTEXT2_SMOKE_TEST=PASS`.
-- **Full Acceptance Smoke Test**: Executed `python scripts/smoke_test_anytext2.py` on `server-zyx`:
-  - **Check 1 & 2**: Loaded AnyText2Model on GPU in 24.15s (FP16, translator disabled).
-  - **Check 3 (Stock cartoon edit)**: Prompt `"a cartoon pig expression", "下班"`, generated in 14.57s, saved to `/mnt/data/zyx/SynSLP/outputs/smoke_test/stock_example_result.png`.
-  - **Check 4 (SLP Chinese ship plate edit)**: Prompt `"a Chinese ship license plate", "皖宣城货0188"`, generated in 2.55s, saved to `/mnt/data/zyx/SynSLP/outputs/smoke_test/slp_reference_edit_result.png`.
-  - **Verdict**: `STAGE 4 VERIFIED: ALL CHECKS PASSED (PASS)`. Peak VRAM: 12.52 GB.
+AnyText2's internal pipeline (`ms_wrapper.py` & `util.py:resize_image`) strictly requires spatial dimensions to be multiples of 64 (`new_dim = dim - (dim % 64)`). Because original height `57 < 64`, unadapted dimensions calculate target height to 0 and trigger OpenCV resize assertion failures.
+Per user clarification, an in-memory deterministic resolution policy was applied:
+- In-memory scaling: `(239 x 57)` -> `(512 x 128)` for diffusion sampling (aspect ratio 4.00 vs 4.19 original).
+- High-resolution diffusion output saved directly (`512 x 128`).
+- Lanczos4 scaled-back output saved at exact original resolution (`239 x 57`).
 
 ---
 
-## Deployment Metadata & Environment Specifications
+## Fixed Generation Parameters
 
-- **Server Host**: `server-zyx` (`10.1.20.231`, Ubuntu 22.04 LTS)
-- **GPU**: NVIDIA GeForce RTX 4090 (47.36 GB addressable)
-- **Driver Version**: 580.119.02 | **CUDA**: 13.0
-- **Python**: 3.10.6 (`/mnt/data/zyx/miniconda3/envs/anytext2/bin/python`)
-- **PyTorch**: `2.1.0+cu121`
-- **Torchvision**: `0.16.0+cu121`
-- **Peak Inference VRAM**: 12.52 GB
-- **AnyText2 Upstream Commit**: `b06c583a583818f3679665ef67b51363f107853c`
-- **Model Weights**: ModelScope `iic/cv_anytext2` (`anytext_v2.0.ckpt`, 5.58 GB)
+- **Hardware**: NVIDIA GeForce RTX 4090 on `server-zyx` (FP16 mode, translator disabled)
+- **Model Load Time**: 23.40s
+- **Seed**: `2026`
+- **DDIM Steps**: `20`
+- **CFG Scale**: `9.0`
+- **Eta**: `0.0`
+- **Mode**: `"edit"`
+- **Sort Priority**: `"↔"`
+- **Prompt (img_prompt)**: `"a Chinese ship license plate"`
+- **Positive Prompt (a_prompt)**: `"a Chinese ship license plate, blue background, white clean text, realistic photo"`
+- **Negative Prompt (n_prompt)**: `"low quality, blurry, noisy"`
 
 ---
 
-## Residual Limitations & Notes
-1. **Hardware Requirement**: NVIDIA GPU with >= 16 GB VRAM is recommended for AnyText2 FP16 inference (12.52 GB peak VRAM observed during DDIM sampling).
-2. **Legacy Package Compatibility**: Upstream AnyText2 code depends on older APIs (`pkg_resources`, `font.getsize`, PyTorch Lightning 1.x `rank_zero_only`). The tracked `scripts/requirements-anytext2-compat.txt` prevents newer incompatible package versions from breaking the environment.
+## Experimental Results & Output Paths
+
+Directory on `server-zyx` (and local mirror):
+`/mnt/data/zyx/SynSLP/outputs/single_image_tuning/dongtai168/`
+
+| Strength | Inference Time | Diffusion Output (512x128) | Scaled-Back Output (239x57) | Notes / Visual Observations |
+| :---: | :---: | :--- | :--- | :--- |
+| **0.3** | 2.77s | `strength_0.3.png` | `strength_0.3_orig_res.png` | Insufficient control; text area shows distorted noisy strokes; target text not formed. |
+| **0.5** | 2.13s | `strength_0.5.png` | `strength_0.5_orig_res.png` | Control remains weak; character strokes partially form but digits/characters are heavily fragmented. |
+| **0.7** | 2.17s | `strength_0.7.png` | `strength_0.7_orig_res.png` | "苏" and "航" appear distinctly; digit region partially forms ("2 1 8" variant). |
+| **1.0** | 2.28s | `strength_1.0.png` | `strength_1.0_orig_res.png` | High text fidelity; "苏" and "航" glyphs are clear, digits formed ("E 6 5" / modified digit styles); background SLP texture preserved. |
+
+### Side-by-Side Comparison Grids
+- **High-Resolution Grid (512x820)**: `/mnt/data/zyx/SynSLP/outputs/single_image_tuning/dongtai168/comparison_grid.png`
+- **Original-Resolution Grid (239x465)**: `/mnt/data/zyx/SynSLP/outputs/single_image_tuning/dongtai168/comparison_grid_orig_res.png`
+
+---
+
+## Git Consistency
+
+- **Commit**: `b189db6be5b0734a02371865d1967e0981275c9b`
+- **Local HEAD == origin/main == server HEAD**: All verified aligned.
+- **Tracked Entry Point**: `scripts/tune_anytext2_strength.py`
+- **Working Tree**: Clean on both local and `server-zyx`.

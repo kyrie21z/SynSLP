@@ -1,219 +1,302 @@
-diff --git a/patches/anytext2/0001-anytext2-compatibility.patch b/patches/anytext2/0001-anytext2-compatibility.patch
+diff --git a/scripts/tune_anytext2_strength.py b/scripts/tune_anytext2_strength.py
 new file mode 100644
-index 0000000..3b962e2
+index 0000000..2a3fc8c
 --- /dev/null
-+++ b/patches/anytext2/0001-anytext2-compatibility.patch
-@@ -0,0 +1,26 @@
-+diff --git a/ldm/modules/attention.py b/ldm/modules/attention.py
-+index 2ae1fb8..e20c452 100644
-+--- a/ldm/modules/attention.py
-++++ b/ldm/modules/attention.py
-+@@ -187,7 +187,7 @@ class CrossAttention(nn.Module):
-+             sim.masked_fill_(~mask, max_neg_value)
-+ 
-+         # attention, what we cannot get enough of
-+-        sim = sim.softmax(dim=-1)
-++        sim = sim.softmax(dim=-1).to(v.dtype)
-+ 
-+         out = einsum('b i j, b j d -> b i d', sim, v)
-+         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
-+diff --git a/ms_wrapper.py b/ms_wrapper.py
-+index 5184798..16a773d 100644
-+--- a/ms_wrapper.py
-++++ b/ms_wrapper.py
-+@@ -367,6 +367,8 @@ class AnyText2Model(TorchModel):
-+             fir, sec = 1, 0  # top-down first
-+         elif sort_priority == '↔':
-+             fir, sec = 0, 1  # left-right first
-++        else:
-++            fir, sec = 0, 1  # default left-right
-+         components.sort(key=lambda c: (c[1][fir]//gap, c[1][sec]//gap))
-+         sorted_components = [c[0] for c in components]
-+         return sorted_components
-diff --git a/scripts/check_anytext2.sh b/scripts/check_anytext2.sh
-index f217ade..b50244e 100644
---- a/scripts/check_anytext2.sh
-+++ b/scripts/check_anytext2.sh
-@@ -5,12 +5,21 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
- ANYTEXT2_DIR="$ROOT_DIR/third_party/AnyText2"
- ENV_NAME="anytext2"
- 
-+if ! command -v conda >/dev/null 2>&1; then
-+  for candidate in "/mnt/data/zyx/miniconda3/bin" "$HOME/miniconda3/bin" "$HOME/anaconda3/bin"; do
-+    if [[ -x "$candidate/conda" ]]; then
-+      export PATH="$candidate:$PATH"
-+      break
-+    fi
-+  done
-+fi
++++ b/scripts/tune_anytext2_strength.py
+@@ -0,0 +1,296 @@
++#!/usr/bin/env python3
++"""
++SynSLP AnyText2 Single-Image Edit Strength Tuning
 +
- [[ -d "$ANYTEXT2_DIR" ]] || { echo "ERROR: $ANYTEXT2_DIR not found. Run scripts/setup_anytext2.sh first."; exit 1; }
- [[ -f "$ANYTEXT2_DIR/models/anytext_v2.0.ckpt" ]] || { echo "ERROR: AnyText2 checkpoint not found."; exit 1; }
- 
- cd "$ANYTEXT2_DIR"
- 
--conda run -n "$ENV_NAME" python - <<'PY'
-+conda run --no-capture-output -n "$ENV_NAME" python - <<'PY'
- import torch
- 
- print(f"torch={torch.__version__}")
-diff --git a/scripts/requirements-anytext2-compat.txt b/scripts/requirements-anytext2-compat.txt
-new file mode 100644
-index 0000000..f61957f
---- /dev/null
-+++ b/scripts/requirements-anytext2-compat.txt
-@@ -0,0 +1,20 @@
-+# SynSLP AnyText2 Verified Compatibility Package Pins
-+# Tested on Python 3.10 with PyTorch 2.1.0+cu121 on NVIDIA GeForce RTX 4090
++Target: Find a usable AnyText2 edit configuration for exactly one representative
++tight-crop SLP by isolating a single variable: edit strength (0.3, 0.5, 0.7, 1.0).
 +
-+# Build and C extensions compatibility
-+setuptools==69.5.1
-+numpy==1.24.4
-+Pillow==9.5.0
-+opencv-python==4.7.0.72
++Inputs:
++- Reference: /mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg
++- Mask:      /mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png
++- Target:    苏航268
++"""
 +
-+# Deep learning framework and pipeline compatibility
-+pytorch-lightning==1.9.5
-+diffusers==0.10.2
-+huggingface-hub==0.25.2
-+tokenizers==0.15.2
-+transformers==4.38.2
++import os
++import sys
++import time
++import shutil
++import argparse
++from pathlib import Path
++import numpy as np
++import cv2
++import torch
 +
-+# Upstream runtime dependencies
-+opencc==1.4.2
-+datasets>=2.14.0
-+modelscope>=1.23.0
-diff --git a/scripts/run_anytext2_demo.sh b/scripts/run_anytext2_demo.sh
-index 833ce0d..bca76fa 100644
---- a/scripts/run_anytext2_demo.sh
-+++ b/scripts/run_anytext2_demo.sh
-@@ -5,6 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
- ANYTEXT2_DIR="$ROOT_DIR/third_party/AnyText2"
- ENV_NAME="anytext2"
- 
-+if ! command -v conda >/dev/null 2>&1; then
-+  for candidate in "/mnt/data/zyx/miniconda3/bin" "$HOME/miniconda3/bin" "$HOME/anaconda3/bin"; do
-+    if [[ -x "$candidate/conda" ]]; then
-+      export PATH="$candidate:$PATH"
-+      break
-+    fi
-+  done
-+fi
 +
- [[ -d "$ANYTEXT2_DIR" ]] || { echo "ERROR: $ANYTEXT2_DIR not found. Run scripts/setup_anytext2.sh first."; exit 1; }
- 
- cd "$ANYTEXT2_DIR"
-diff --git a/scripts/setup_anytext2.sh b/scripts/setup_anytext2.sh
-index 2918f9e..a3f1be9 100644
---- a/scripts/setup_anytext2.sh
-+++ b/scripts/setup_anytext2.sh
-@@ -7,28 +7,72 @@ ANYTEXT2_DIR="$THIRD_PARTY_DIR/AnyText2"
- ENV_NAME="anytext2"
- UPSTREAM_URL="https://github.com/tyxsspa/AnyText2.git"
- ANYTEXT2_REV="${ANYTEXT2_REV:-b06c583a583818f3679665ef67b51363f107853c}"
-+PATCH_FILE="$ROOT_DIR/patches/anytext2/0001-anytext2-compatibility.patch"
-+COMPAT_REQ="$ROOT_DIR/scripts/requirements-anytext2-compat.txt"
++def parse_args():
++    parser = argparse.ArgumentParser(description="AnyText2 Edit Strength Tuning")
++    parser.add_argument(
++        "--ref_image",
++        type=str,
++        default="/mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg",
++        help="Path to reference image",
++    )
++    parser.add_argument(
++        "--mask_image",
++        type=str,
++        default="/mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png",
++        help="Path to mask image",
++    )
++    parser.add_argument("--target_text", type=str, default="苏航268")
++    parser.add_argument("--seed", type=int, default=2026)
++    parser.add_argument("--ddim_steps", type=int, default=20)
++    parser.add_argument("--cfg_scale", type=float, default=9.0)
++    parser.add_argument("--render_w", type=int, default=512)
++    parser.add_argument("--render_h", type=int, default=128)
++    parser.add_argument(
++        "--output_dir",
++        type=str,
++        default="/mnt/data/zyx/SynSLP/outputs/single_image_tuning/dongtai168",
++    )
++    parser.add_argument("--device", type=str, default="cuda:0")
++    return parser.parse_args()
 +
-+# Locate conda if running under non-interactive SSH
-+if ! command -v conda >/dev/null 2>&1; then
-+  for candidate in "/mnt/data/zyx/miniconda3/bin" "$HOME/miniconda3/bin" "$HOME/anaconda3/bin"; do
-+    if [[ -x "$candidate/conda" ]]; then
-+      export PATH="$candidate:$PATH"
-+      break
-+    fi
-+  done
-+fi
- 
- command -v git >/dev/null 2>&1 || { echo "ERROR: git not found"; exit 1; }
- command -v conda >/dev/null 2>&1 || { echo "ERROR: conda not found"; exit 1; }
- 
- mkdir -p "$THIRD_PARTY_DIR"
- 
-+# 1. Clone or fetch pinned upstream commit
- if [[ ! -d "$ANYTEXT2_DIR/.git" ]]; then
-+  echo "[SynSLP] Cloning upstream AnyText2..."
-   git clone "$UPSTREAM_URL" "$ANYTEXT2_DIR"
- fi
- 
-+echo "[SynSLP] Checking out pinned AnyText2 commit: $ANYTEXT2_REV"
- git -C "$ANYTEXT2_DIR" fetch --all --tags
- git -C "$ANYTEXT2_DIR" checkout --detach "$ANYTEXT2_REV"
- 
-+# 2. Idempotently apply repository-controlled compatibility patch
-+if [[ -f "$PATCH_FILE" ]]; then
-+  if git -C "$ANYTEXT2_DIR" apply --check "$PATCH_FILE" >/dev/null 2>&1; then
-+    echo "[SynSLP] Applying compatibility patch: $(basename "$PATCH_FILE")"
-+    git -C "$ANYTEXT2_DIR" apply "$PATCH_FILE"
-+  elif git -C "$ANYTEXT2_DIR" apply -R --check "$PATCH_FILE" >/dev/null 2>&1; then
-+    echo "[SynSLP] Compatibility patch already applied: $(basename "$PATCH_FILE")"
-+  else
-+    echo "ERROR: Compatibility patch cannot be applied cleanly to AnyText2."
-+    exit 1
-+  fi
-+else
-+  echo "ERROR: Compatibility patch not found at $PATCH_FILE"
-+  exit 1
-+fi
 +
-+# 3. Create or update isolated conda environment
- if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
--  echo "[SynSLP] Updating existing conda env: $ENV_NAME"
--  conda env update -n "$ENV_NAME" -f "$ANYTEXT2_DIR/environment.yaml" --prune
-+  echo "[SynSLP] Using existing conda env: $ENV_NAME"
- else
-   echo "[SynSLP] Creating conda env from upstream environment.yaml"
-   conda env create -f "$ANYTEXT2_DIR/environment.yaml"
- fi
- 
--echo "[SynSLP] Downloading official AnyText2 checkpoint: iic/cv_anytext2"
-+# 4. Enforce CUDA-enabled PyTorch build and compatibility pins
-+echo "[SynSLP] Ensuring CUDA-enabled PyTorch 2.1.0..."
-+if ! conda run -n "$ENV_NAME" python -c "import torch; assert torch.cuda.is_available()" >/dev/null 2>&1; then
-+  echo "[SynSLP] Reinstalling PyTorch with CUDA 12.1..."
-+  conda run -n "$ENV_NAME" python -m pip install torch==2.1.0+cu121 torchvision==0.16.0+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
-+fi
++def validate_inputs(ref_path: Path, mask_path: Path):
++    print("=" * 60)
++    print("Step 1: Validating Fixed Inputs")
++    print("=" * 60)
 +
-+if [[ -f "$COMPAT_REQ" ]]; then
-+  echo "[SynSLP] Enforcing verified compatibility package pins..."
-+  conda run -n "$ENV_NAME" python -m pip install -r "$COMPAT_REQ"
-+fi
++    if not ref_path.exists():
++        raise FileNotFoundError(f"Reference image not found: {ref_path}")
++    if not mask_path.exists():
++        raise FileNotFoundError(f"Mask image not found: {mask_path}")
 +
-+# 5. Download and verify official checkpoint
-+echo "[SynSLP] Downloading/verifying official AnyText2 checkpoint: iic/cv_anytext2"
- export ANYTEXT2_DIR
- conda run -n "$ENV_NAME" python - <<'PY'
- import os
-@@ -39,21 +83,23 @@ from modelscope import snapshot_download
- dst = Path(os.environ["ANYTEXT2_DIR"]) / "models"
- dst.mkdir(parents=True, exist_ok=True)
- 
--src = Path(snapshot_download("iic/cv_anytext2"))
--for item in src.iterdir():
--    target = dst / item.name
--    if item.is_dir():
--        shutil.copytree(item, target, dirs_exist_ok=True)
--    else:
--        shutil.copy2(item, target)
--
- ckpt = dst / "anytext_v2.0.ckpt"
-+if not ckpt.exists():
-+    print("[SynSLP] Checkpoint not found locally. Downloading from ModelScope...")
-+    src = Path(snapshot_download("iic/cv_anytext2"))
-+    for item in src.iterdir():
-+        target = dst / item.name
-+        if item.is_dir():
-+            shutil.copytree(item, target, dirs_exist_ok=True)
++    ref_bgr = cv2.imread(str(ref_path))
++    if ref_bgr is None:
++        raise ValueError(f"Failed to read reference image: {ref_path}")
++
++    mask_bgr = cv2.imread(str(mask_path))
++    if mask_bgr is None:
++        raise ValueError(f"Failed to read mask image: {mask_path}")
++
++    ref_h, ref_w = ref_bgr.shape[:2]
++    mask_h, mask_w = mask_bgr.shape[:2]
++
++    print(f"Reference path:   {ref_path}")
++    print(f"Reference shape:  ({ref_h}, {ref_w}, {ref_bgr.shape[2]})")
++    print(f"Mask path:        {mask_path}")
++    print(f"Mask shape:       ({mask_h}, {mask_w}, {mask_bgr.shape[2]})")
++
++    if (ref_h, ref_w) != (mask_h, mask_w):
++        raise ValueError(
++            f"Dimension mismatch! Reference is ({ref_w}x{ref_h}) but mask is ({mask_w}x{mask_h})"
++        )
++
++    # Check mask values
++    unique_vals = np.unique(mask_bgr)
++    print(f"Mask unique values: {unique_vals.tolist()}")
++    if not set(unique_vals).issubset({0, 255}):
++        print(f"WARNING: Mask contains non-binary values: {unique_vals}")
++
++    editable_pixels = np.sum(mask_bgr[..., 0] > 0)
++    total_pixels = ref_h * ref_w
++    pct = (editable_pixels / total_pixels) * 100
++    print(f"Editable text pixels (value 255): {editable_pixels}/{total_pixels} ({pct:.2f}%)")
++    print("Input validation: PASS")
++
++    return ref_bgr, mask_bgr, (ref_w, ref_h)
++
++
++def create_comparison_grid(
++    items: list,
++    output_path: Path,
++    img_size: tuple = None,
++):
++    """
++    Creates a clean vertically stacked comparison with text label headers.
++    items: list of (label, bgr_image)
++    """
++    card_list = []
++    target_w = items[0][1].shape[1] if img_size is None else img_size[0]
++    target_h = items[0][1].shape[0] if img_size is None else img_size[1]
++    header_h = 28
++
++    for label, img in items:
++        if img.shape[:2] != (target_h, target_w):
++            rendered = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
 +        else:
-+            shutil.copy2(item, target)
++            rendered = img.copy()
 +
- if not ckpt.exists():
-     raise FileNotFoundError(f"Expected checkpoint not found: {ckpt}")
- 
--print(f"[SynSLP] checkpoint ready: {ckpt}")
-+print(f"[SynSLP] Checkpoint ready: {ckpt} ({ckpt.stat().st_size / (1024**3):.2f} GB)")
- PY
- 
- echo
--echo "[SynSLP] AnyText2 deployment files are ready."
-+echo "[SynSLP] AnyText2 deployment files and environment are ready."
- echo "Next: bash scripts/check_anytext2.sh"
++        # Create header bar
++        header = np.full((header_h, target_w, 3), (35, 35, 35), dtype=np.uint8)
++        font = cv2.FONT_HERSHEY_SIMPLEX
++        font_scale = 0.6 if target_w >= 400 else 0.45
++        thickness = 1
++        text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
++        text_x = 12
++        text_y = (header_h + text_size[1]) // 2
++        cv2.putText(header, label, (text_x, text_y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
++
++        card = np.vstack([header, rendered])
++        card_list.append(card)
++
++    separator = np.full((10, target_w, 3), (20, 20, 20), dtype=np.uint8)
++    grid_rows = []
++    for i, card in enumerate(card_list):
++        grid_rows.append(card)
++        if i < len(card_list) - 1:
++            grid_rows.append(separator)
++
++    final_grid = np.vstack(grid_rows)
++    cv2.imwrite(str(output_path), final_grid)
++    print(f"Saved comparison grid: {output_path} ({final_grid.shape[1]}x{final_grid.shape[0]})")
++
++
++def main():
++    args = parse_args()
++
++    ref_path = Path(args.ref_image)
++    mask_path = Path(args.mask_image)
++    output_dir = Path(args.output_dir)
++    output_dir.mkdir(parents=True, exist_ok=True)
++
++    # 1. Validate inputs
++    ref_bgr, mask_bgr, orig_dims = validate_inputs(ref_path, mask_path)
++    orig_w, orig_h = orig_dims
++
++    # Copy reference and mask into experiment directory for inspection
++    shutil.copy2(ref_path, output_dir / "reference.jpg")
++    shutil.copy2(mask_path, output_dir / "mask.png")
++
++    # 2. Setup AnyText2 inference environment
++    root_dir = Path(__file__).resolve().parent.parent
++    anytext2_dir = root_dir / "third_party" / "AnyText2"
++    if not anytext2_dir.exists():
++        raise FileNotFoundError(f"AnyText2 directory not found: {anytext2_dir}")
++
++    sys.path.insert(0, str(anytext2_dir))
++    os.chdir(str(anytext2_dir))
++
++    print("\n" + "=" * 60)
++    print("Step 2: Initializing AnyText2 Model")
++    print("=" * 60)
++
++    from ms_wrapper import AnyText2Model
++
++    t_start_load = time.time()
++    model = AnyText2Model(
++        model_dir="./models",
++        use_fp16=True,
++        use_translator=False,
++        font_path="font/Arial_Unicode.ttf",
++        model_path="models/anytext_v2.0.ckpt",
++    ).cuda(0)
++    t_load = time.time() - t_start_load
++    print(f"AnyText2Model loaded on GPU in {t_load:.2f}s (FP16 mode, translator disabled).")
++
++    # In-memory deterministic resolution adaptation to valid SD multiple of 64
++    render_w = args.render_w
++    render_h = args.render_h
++    print(f"\nResolution policy: Scaling in-memory from ({orig_w}x{orig_h}) to ({render_w}x{render_h})")
++    print(f"Original aspect ratio: {orig_w / orig_h:.3f}, Render aspect ratio: {render_w / render_h:.3f}")
++
++    ref_rgb_scaled = cv2.resize(ref_bgr[..., ::-1], (render_w, render_h), interpolation=cv2.INTER_LANCZOS4)
++    mask_scaled = cv2.resize(mask_bgr, (render_w, render_h), interpolation=cv2.INTER_NEAREST)
++
++    # Fixed generation parameters across all runs
++    strengths = [0.3, 0.5, 0.7, 1.0]
++    fixed_base_params = {
++        "mode": "edit",
++        "sort_priority": "↔",
++        "show_debug": False,
++        "revise_pos": False,
++        "image_count": 1,
++        "ddim_steps": args.ddim_steps,
++        "image_width": render_w,
++        "image_height": render_h,
++        "attnx_scale": 1.0,
++        "font_hollow": False,
++        "cfg_scale": args.cfg_scale,
++        "eta": 0.0,
++        "a_prompt": "a Chinese ship license plate, blue background, white clean text, realistic photo",
++        "n_prompt": "low quality, blurry, noisy",
++        "base_model_path": "",
++        "lora_path_ratio": "",
++        "glyline_font_path": ["None"] * 5,
++        "font_hint_image": [None] * 5,
++        "font_hint_mask": [None] * 5,
++        "text_colors": "500,500,500 500,500,500 500,500,500 500,500,500 500,500,500",
++    }
++
++    input_data = {
++        "img_prompt": "a Chinese ship license plate",
++        "text_prompt": f'"{args.target_text}"',
++        "seed": args.seed,
++        "draw_pos": mask_scaled,
++        "ori_image": ref_rgb_scaled,
++    }
++
++    print("\n" + "=" * 60)
++    print(f"Step 3: Running 4 Edit Strength Values {strengths}")
++    print(f"Target Text:    \"{args.target_text}\"")
++    print(f"Fixed Seed:     {args.seed}")
++    print(f"Fixed Steps:    {args.ddim_steps}")
++    print(f"Fixed CFG:      {args.cfg_scale}")
++    print("=" * 60)
++
++    results_for_comparison = [("Reference (东泰168)", ref_bgr)]
++    timing_records = {}
++
++    for s in strengths:
++        print(f"\n---> Running strength = {s} ...")
++        curr_params = dict(fixed_base_params)
++        curr_params["strength"] = s
++
++        t0 = time.time()
++        with torch.no_grad():
++            results, rtn_code, rtn_warning, _ = model(input_data, **curr_params)
++        elapsed = time.time() - t0
++        timing_records[s] = elapsed
++
++        if rtn_code < 0:
++            raise RuntimeError(f"Inference failed for strength {s}: {rtn_warning}")
++
++        out_bgr_512 = results[0][..., ::-1]
++        out_path_512 = output_dir / f"strength_{s}.png"
++        cv2.imwrite(str(out_path_512), out_bgr_512)
++
++        # Scale back to original resolution (57x239)
++        out_bgr_orig = cv2.resize(out_bgr_512, (orig_w, orig_h), interpolation=cv2.INTER_LANCZOS4)
++        out_path_orig = output_dir / f"strength_{s}_orig_res.png"
++        cv2.imwrite(str(out_path_orig), out_bgr_orig)
++
++        results_for_comparison.append((f"Strength {s} (Elapsed: {elapsed:.2f}s)", out_bgr_512))
++        print(f"PASS: strength={s} finished in {elapsed:.2f}s")
++        print(f"Saved: {out_path_512} ({render_w}x{render_h})")
++        print(f"Saved: {out_path_orig} ({orig_w}x{orig_h})")
++
++    # 4. Create comparison grids
++    print("\n" + "=" * 60)
++    print("Step 4: Creating Comparison Grids")
++    print("=" * 60)
++
++    grid_path_512 = output_dir / "comparison_grid.png"
++    create_comparison_grid(results_for_comparison, grid_path_512, (render_w, render_h))
++
++    orig_comparison = [(item[0], cv2.resize(item[1], (orig_w, orig_h), interpolation=cv2.INTER_LANCZOS4) if item[1].shape[:2] != (orig_h, orig_w) else item[1]) for item in results_for_comparison]
++    grid_path_orig = output_dir / "comparison_grid_orig_res.png"
++    create_comparison_grid(orig_comparison, grid_path_orig, (orig_w, orig_h))
++
++    # Summary table
++    print("\n" + "=" * 60)
++    print("Summary of Tuning Execution")
++    print("=" * 60)
++    print(f"Target Text:       {args.target_text}")
++    print(f"Seed:              {args.seed}")
++    print(f"Steps:             {args.ddim_steps}")
++    print(f"CFG Scale:         {args.cfg_scale}")
++    print(f"Resolution Policy: {orig_w}x{orig_h} -> {render_w}x{render_h} (diffusion) -> {orig_w}x{orig_h}")
++    for s in strengths:
++        print(f"  strength={s:3.1f}: {timing_records[s]:.2f}s -> {output_dir}/strength_{s}.png")
++    print(f"Comparison Grid:   {grid_path_512}")
++    print("TUNING COMPLETED SUCCESSFULLY")
++
++
++if __name__ == "__main__":
++    main()
