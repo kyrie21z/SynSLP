@@ -97,7 +97,7 @@ def main():
 
     stock_params = {
         "mode": "edit",
-        "sort_priority": "left-to-right",
+        "sort_priority": "↔",
         "show_debug": False,
         "revise_pos": False,
         "image_count": 1,
@@ -170,7 +170,7 @@ def main():
     target_chinese_text = "皖宣城货0188"
     slp_params = {
         "mode": "edit",
-        "sort_priority": "left-to-right",
+        "sort_priority": "↔",
         "show_debug": False,
         "revise_pos": False,
         "image_count": 1,
