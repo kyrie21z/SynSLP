@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
@@ -153,9 +153,30 @@ def create_comparison_board(
     col3 = cv2.resize(out_orig, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
 
     def add_card(img, label):
-        header_h = 32
+        header_h = 34
         card = np.full((img.shape[0] + header_h, img.shape[1], 3), (35, 35, 35), dtype=np.uint8)
-        cv2.putText(card, label, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 1, cv2.LINE_AA)
+        card_rgb = cv2.cvtColor(card, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(card_rgb)
+        draw = ImageDraw.Draw(pil_img)
+        font = None
+        font_candidates = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/home/kyrie/.local/share/fonts/kymcm-lite/noto/NotoSerifCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            str(ROOT_DIR / "third_party" / "AnyText2" / "font" / "Arial_Unicode.ttf"),
+        ]
+        for fc in font_candidates:
+            if os.path.exists(fc):
+                try:
+                    font = ImageFont.truetype(fc, 18)
+                    break
+                except Exception:
+                    pass
+        if font is not None:
+            draw.text((10, 6), label, font=font, fill=(255, 255, 255))
+            card = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        else:
+            cv2.putText(card, label, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 1, cv2.LINE_AA)
         card[header_h:, :] = img
         return card
 
