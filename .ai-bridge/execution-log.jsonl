@@ -13,3 +13,6 @@
 {"ts":"2026-09-22T08:31:41.561Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Tune one AnyText2 SLP edit","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
 {"ts":"2026-09-22T08:34:00.000Z","event":"inputs_validated","reference":"/mnt/data/zyx/SynSLP/reference/easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.jpg","mask":"/mnt/data/zyx/SynSLP/mask/mask_easy&single&ng&nd&东泰168&8&1&T_20220519_11_29_59_740944.png","target_text":"苏航268","verdict":"PASS"}
 {"ts":"2026-09-22T08:35:34.000Z","event":"strength_tuning_completed","strengths":[0.3,0.5,0.7,1.0],"output_dir":"/mnt/data/zyx/SynSLP/outputs/single_image_tuning/dongtai168","verdict":"PASS"}
+{"ts":"2026-09-22T09:15:52.232Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Compare AnyText2 baseline vs Font Mimic","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
+{"ts":"2026-09-22T09:17:30.000Z","event":"font_mimic_api_verified","method":"draw_font_hint+crop_image+embedding_manager","verdict":"PASS"}
+{"ts":"2026-09-22T09:18:59.000Z","event":"ab_experiment_completed","output_dir":"/mnt/data/zyx/SynSLP/outputs/font_mimic_ab/dongtai168","verdict":"PASS"}
