@@ -55,6 +55,24 @@ def parse_args():
         default="2",
         help="Replacement text for the masked character box (default: '2')",
     )
+    parser.add_argument(
+        "--img_prompt",
+        type=str,
+        default="a realistic photo of a Chinese ship license plate",
+        help="Image prompt for AnyText2 conditioning",
+    )
+    parser.add_argument(
+        "--baseline_crop",
+        type=Path,
+        default=None,
+        help="Path to baseline output crop for A/B comparison board",
+    )
+    parser.add_argument(
+        "--baseline_prompt",
+        type=str,
+        default="a realistic photo of a Chinese ship license plate",
+        help="Baseline image prompt text for comparison board legend",
+    )
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--ddim_steps", type=int, default=20)
     parser.add_argument("--strength", type=float, default=1.0)
@@ -124,6 +142,35 @@ def invert_letterbox(
     return restored
 
 
+def render_header_card(img: np.ndarray, label: str, header_h: int = 34, font_size: int = 18) -> np.ndarray:
+    """Render a card with a top header bar containing cleanly rendered text."""
+    card = np.full((img.shape[0] + header_h, img.shape[1], 3), (35, 35, 35), dtype=np.uint8)
+    card_rgb = cv2.cvtColor(card, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(card_rgb)
+    draw = ImageDraw.Draw(pil_img)
+    font = None
+    font_candidates = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/home/kyrie/.local/share/fonts/kymcm-lite/noto/NotoSerifCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        str(ROOT_DIR / "third_party" / "AnyText2" / "font" / "Arial_Unicode.ttf"),
+    ]
+    for fc in font_candidates:
+        if os.path.exists(fc):
+            try:
+                font = ImageFont.truetype(fc, font_size)
+                break
+            except Exception:
+                pass
+    if font is not None:
+        draw.text((10, 6), label, font=font, fill=(255, 255, 255))
+        card = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    else:
+        cv2.putText(card, label, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 1, cv2.LINE_AA)
+    card[header_h:, :] = img
+    return card
+
+
 def create_comparison_board(
     ref_orig: np.ndarray,
     mask_orig: np.ndarray,
@@ -134,10 +181,6 @@ def create_comparison_board(
     output_path: Path,
 ):
     """Generate a clean side-by-side comparison board with clear annotations."""
-    # Convert mask to 3-channel
-    mask_orig_3ch = cv2.cvtColor(mask_orig, cv2.COLOR_GRAY2BGR)
-    mask_512_3ch = cv2.cvtColor(mask_512, cv2.COLOR_GRAY2BGR)
-
     # Blend mask with ref for visualization
     red_overlay_orig = ref_orig.copy()
     red_overlay_orig[mask_orig > 0] = [0, 0, 255]
@@ -152,37 +195,9 @@ def create_comparison_board(
     col2 = cv2.resize(blend_orig, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
     col3 = cv2.resize(out_orig, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
 
-    def add_card(img, label):
-        header_h = 34
-        card = np.full((img.shape[0] + header_h, img.shape[1], 3), (35, 35, 35), dtype=np.uint8)
-        card_rgb = cv2.cvtColor(card, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(card_rgb)
-        draw = ImageDraw.Draw(pil_img)
-        font = None
-        font_candidates = [
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/home/kyrie/.local/share/fonts/kymcm-lite/noto/NotoSerifCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-            str(ROOT_DIR / "third_party" / "AnyText2" / "font" / "Arial_Unicode.ttf"),
-        ]
-        for fc in font_candidates:
-            if os.path.exists(fc):
-                try:
-                    font = ImageFont.truetype(fc, 18)
-                    break
-                except Exception:
-                    pass
-        if font is not None:
-            draw.text((10, 6), label, font=font, fill=(255, 255, 255))
-            card = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        else:
-            cv2.putText(card, label, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 1, cv2.LINE_AA)
-        card[header_h:, :] = img
-        return card
-
-    c1 = add_card(col1, "1. Reference (239x57 -> 东泰168)")
-    c2 = add_card(col2, "2. Order-2 Edit Mask (Glyph '1')")
-    c3 = add_card(col3, "3. Edited Output (239x57 -> 东泰268)")
+    c1 = render_header_card(col1, "1. Reference (239x57 -> 东泰168)")
+    c2 = render_header_card(col2, "2. Order-2 Edit Mask (Glyph '1')")
+    c3 = render_header_card(col3, "3. Edited Output (239x57 -> 东泰268)")
 
     row_orig = np.hstack([c1, c2, c3])
 
@@ -191,9 +206,9 @@ def create_comparison_board(
     red_512[mask_512 > 0] = [0, 0, 255]
     blend_512 = cv2.addWeighted(ref_512, 0.6, red_512, 0.4, 0)
 
-    lb1 = add_card(ref_512, "Letterbox Reference (512x512)")
-    lb2 = add_card(blend_512, "Letterbox Mask (Order 2)")
-    lb3 = add_card(out_512, "AnyText2 Output (512x512)")
+    lb1 = render_header_card(ref_512, "Letterbox Reference (512x512)")
+    lb2 = render_header_card(blend_512, "Letterbox Mask (Order 2)")
+    lb3 = render_header_card(out_512, "AnyText2 Output (512x512)")
 
     # Resize letterbox cards to match row_orig width
     lb_combined = np.hstack([lb1, lb2, lb3])
@@ -204,6 +219,91 @@ def create_comparison_board(
 
     cv2.imwrite(str(output_path), final_board)
     print(f"Saved comparison board: {output_path} ({final_board.shape[1]}x{final_board.shape[0]})")
+
+
+def create_prompt_ab_comparison_board(
+    ref_orig: np.ndarray,
+    baseline_orig: np.ndarray,
+    ablation_orig: np.ndarray,
+    baseline_prompt: str,
+    ablation_prompt: str,
+    output_path: Path,
+    bbox: list[int] = [120, 3, 147, 52],
+):
+    """
+    Generate an A/B comparison board showing:
+    1. Full-plate crops (3x scale) for Reference, Baseline, and Ablation.
+    2. Zoomed-in glyph region around order-2 bbox to evaluate the rectangular patch.
+    3. Bottom text legend with exact prompts.
+    """
+    scale_full = 3
+    h, w = ref_orig.shape[:2]
+    disp_w = w * scale_full
+    disp_h = h * scale_full
+
+    col1 = cv2.resize(ref_orig, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
+    col2 = cv2.resize(baseline_orig, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
+    col3 = cv2.resize(ablation_orig, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
+
+    c1 = render_header_card(col1, "1. Reference: 东泰168")
+    c2 = render_header_card(col2, "2. Baseline (Prompt: 'ship license plate')")
+    c3 = render_header_card(col3, "3. Ablation (Prompt: 'painted hull')")
+    row_full = np.hstack([c1, c2, c3])
+
+    # Zoomed-in crop around order-2 glyph
+    pad_x = 18
+    x1 = max(0, bbox[0] - pad_x)
+    x2 = min(w, bbox[2] + pad_x)
+    y1 = 0
+    y2 = h
+
+    crop_ref = ref_orig[y1:y2, x1:x2]
+    crop_base = baseline_orig[y1:y2, x1:x2]
+    crop_ab = ablation_orig[y1:y2, x1:x2]
+
+    target_crop_w = row_full.shape[1] // 3
+    crop_scale = target_crop_w / (x2 - x1)
+    target_crop_h = int(round((y2 - y1) * crop_scale))
+
+    z1_img = cv2.resize(crop_ref, (target_crop_w, target_crop_h), interpolation=cv2.INTER_NEAREST)
+    z2_img = cv2.resize(crop_base, (target_crop_w, target_crop_h), interpolation=cv2.INTER_NEAREST)
+    z3_img = cv2.resize(crop_ab, (target_crop_w, target_crop_h), interpolation=cv2.INTER_NEAREST)
+
+    z1 = render_header_card(z1_img, "Reference Glyph '1' (Zoomed Detail)")
+    z2 = render_header_card(z2_img, "Baseline Glyph '2' (Check Rectangular Border)")
+    z3 = render_header_card(z3_img, "Ablation Glyph '2' (Check Rectangular Border)")
+    row_zoom = np.hstack([z1, z2, z3])
+
+    # Text legend at bottom
+    banner_w = row_full.shape[1]
+    banner_h = 100
+    banner = np.full((banner_h, banner_w, 3), (25, 25, 25), dtype=np.uint8)
+    banner_pil = Image.fromarray(cv2.cvtColor(banner, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(banner_pil)
+    font = None
+    for fc in [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/home/kyrie/.local/share/fonts/kymcm-lite/noto/NotoSerifCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    ]:
+        if os.path.exists(fc):
+            try:
+                font = ImageFont.truetype(fc, 15)
+                break
+            except Exception:
+                pass
+    if font is not None:
+        draw.text((15, 10), f"[Baseline Prompt]: {baseline_prompt}", font=font, fill=(180, 200, 255))
+        draw.text((15, 40), f"[Ablation Prompt]: {ablation_prompt}", font=font, fill=(160, 255, 180))
+        draw.text((15, 70), f"[Controlled Variable]: img_prompt only (Seed=2026, Steps=20, CFG=7.5, Strength=1.0, FontMimic=Off)", font=font, fill=(200, 200, 200))
+    banner = cv2.cvtColor(np.array(banner_pil), cv2.COLOR_RGB2BGR)
+
+    sep1 = np.full((12, banner_w, 3), (15, 15, 15), dtype=np.uint8)
+    sep2 = np.full((12, banner_w, 3), (15, 15, 15), dtype=np.uint8)
+
+    final_board = np.vstack([row_full, sep1, row_zoom, sep2, banner])
+    cv2.imwrite(str(output_path), final_board)
+    print(f"Saved prompt A/B comparison board: {output_path} ({final_board.shape[1]}x{final_board.shape[0]})")
 
 
 def main():
@@ -298,7 +398,7 @@ def main():
     # Define official-faithful parameters
     a_prompt = "best quality, extremely detailed,4k, HD, supper legible text,  clear text edges,  clear strokes, neat writing, no watermarks"
     n_prompt = "low-res, bad anatomy, extra digit, fewer digits, cropped, worst quality, low quality, watermark, unreadable text, messy words, distorted text, disorganized writing, advertising picture"
-    img_prompt = "a realistic photo of a Chinese ship license plate"
+    img_prompt = args.img_prompt
     text_prompt = f'"{args.replacement_text}"'
 
     mask_512_3ch = cv2.cvtColor(mask_512, cv2.COLOR_GRAY2BGR)
@@ -391,9 +491,26 @@ def main():
         output_path=comp_path,
     )
 
+    ab_comp_name = None
+    if args.baseline_crop and Path(args.baseline_crop).exists():
+        baseline_crop_path = Path(args.baseline_crop).resolve()
+        baseline_orig_img = cv2.imread(str(baseline_crop_path))
+        if baseline_orig_img is not None:
+            ab_comp_path = output_dir / "comparison_prompt_ab.png"
+            create_prompt_ab_comparison_board(
+                ref_orig=ref_orig,
+                baseline_orig=baseline_orig_img,
+                ablation_orig=out_orig_bgr,
+                baseline_prompt=args.baseline_prompt,
+                ablation_prompt=img_prompt,
+                output_path=ab_comp_path,
+                bbox=bbox,
+            )
+            ab_comp_name = str(ab_comp_path.name)
+
     # 7. Write metadata
     metadata = {
-        "task": "single_character_edit",
+        "task": "single_character_edit_prompt_ablation" if ab_comp_name else "single_character_edit",
         "reference_image": str(args.image),
         "original_dimensions": [orig_w, orig_h],
         "selected_order": args.order,
@@ -428,6 +545,24 @@ def main():
             "comparison": str(comp_path.name),
         },
     }
+
+    if ab_comp_name:
+        metadata["output_files"]["comparison_prompt_ab"] = ab_comp_name
+        metadata["ablation_details"] = {
+            "hypothesis": "Test if visible rectangular patch around generated digit is caused by physical license plate prior",
+            "controlled_variable": "img_prompt",
+            "baseline_img_prompt": args.baseline_prompt,
+            "ablation_img_prompt": img_prompt,
+            "frozen_parameters_identical_proof": {
+                "seed": args.seed == 2026,
+                "ddim_steps": args.ddim_steps == 20,
+                "strength": args.strength == 1.0,
+                "cfg_scale": args.cfg_scale == 7.5,
+                "order": args.order == 2,
+                "bbox": bbox == [120, 3, 147, 52],
+                "font_mimic": False,
+            },
+        }
 
     meta_path = output_dir / "metadata.json"
     with open(meta_path, "w", encoding="utf-8") as f:
