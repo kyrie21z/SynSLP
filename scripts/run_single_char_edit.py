@@ -284,7 +284,7 @@ def main():
         "img_prompt": img_prompt,
         "text_prompt": text_prompt,
         "seed": args.seed,
-        "draw_pos": mask_512,
+        "draw_pos": mask_512[..., None] if mask_512.ndim == 2 else mask_512,
         "ori_image": ref_512[..., ::-1],  # BGR to RGB
     }
 
