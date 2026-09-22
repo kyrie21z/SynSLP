@@ -46,7 +46,7 @@ Per user clarification, an in-memory deterministic resolution policy was applied
 - **Mode**: `"edit"`
 - **Sort Priority**: `"↔"`
 - **Prompt (img_prompt)**: `"a Chinese ship license plate"`
-- **Positive Prompt (a_prompt)**: `"a Chinese ship license plate, blue background, white clean text, realistic photo"`
+- **Positive Prompt (a_prompt)**: `"a Chinese ship license plate, white text, realistic photo"` (Option A: neutral background, removed "blue background")
 - **Negative Prompt (n_prompt)**: `"low quality, blurry, noisy"`
 
 ---
@@ -58,10 +58,10 @@ Directory on `server-zyx` (and local mirror):
 
 | Strength | Inference Time | Diffusion Output (512x128) | Scaled-Back Output (239x57) | Notes / Visual Observations |
 | :---: | :---: | :--- | :--- | :--- |
-| **0.3** | 2.77s | `strength_0.3.png` | `strength_0.3_orig_res.png` | Insufficient control; text area shows distorted noisy strokes; target text not formed. |
-| **0.5** | 2.13s | `strength_0.5.png` | `strength_0.5_orig_res.png` | Control remains weak; character strokes partially form but digits/characters are heavily fragmented. |
-| **0.7** | 2.17s | `strength_0.7.png` | `strength_0.7_orig_res.png` | "苏" and "航" appear distinctly; digit region partially forms ("2 1 8" variant). |
-| **1.0** | 2.28s | `strength_1.0.png` | `strength_1.0_orig_res.png` | High text fidelity; "苏" and "航" glyphs are clear, digits formed ("E 6 5" / modified digit styles); background SLP texture preserved. |
+| **0.3** | 2.74s | `strength_0.3.png` | `strength_0.3_orig_res.png` | Insufficient control; text area shows distorted noisy strokes; target text not formed. |
+| **0.5** | 2.13s | `strength_0.5.png` | `strength_0.5_orig_res.png` | Control remains weak; character strokes partially form but digits/characters are fragmented. |
+| **0.7** | 2.22s | `strength_0.7.png` | `strength_0.7_orig_res.png` | "苏" and "航" appear distinctly in white on dark background; right-side digits formed. |
+| **1.0** | 2.27s | `strength_1.0.png` | `strength_1.0_orig_res.png` | High text fidelity; "苏" and "航" glyphs are clear in white on dark background; right-side plate area formed. |
 
 ### Side-by-Side Comparison Grids
 - **High-Resolution Grid (512x820)**: `/mnt/data/zyx/SynSLP/outputs/single_image_tuning/dongtai168/comparison_grid.png`

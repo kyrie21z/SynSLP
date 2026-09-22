@@ -208,7 +208,7 @@ def main():
         "font_hollow": False,
         "cfg_scale": args.cfg_scale,
         "eta": 0.0,
-        "a_prompt": "a Chinese ship license plate, blue background, white clean text, realistic photo",
+        "a_prompt": "a Chinese ship license plate, white text, realistic photo",
         "n_prompt": "low quality, blurry, noisy",
         "base_model_path": "",
         "lora_path_ratio": "",
