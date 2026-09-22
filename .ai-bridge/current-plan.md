@@ -1,6 +1,6 @@
-# Sync SynSLP and deploy AnyText2
+# Close AnyText2 deployment reproducibility gaps
 
-Updated: 2026-09-22T03:56:46.552Z
+Updated: 2026-09-22T06:07:46.155Z
 Workspace: /home/kyrie/cxprojects/SynSLP
 Target agent: Codex (codex)
 
@@ -8,106 +8,117 @@ Target agent: Codex (codex)
 
 # Goal
 
-Establish SynSLP as one consistent Git repository across local, GitHub, and server, then deploy and minimally validate the official AnyText2 on server. Execute strictly in this order. Do not start a later stage until the previous stage is verified.
+Close the two remaining acceptance gaps from the previous AnyText2 deployment without expanding scope:
 
-## 1. Establish local ↔ GitHub Git baseline
+1. make the server-side AnyText2 compatibility fixes reproducible from repository-controlled deployment assets;
+2. restore final Git consistency so local HEAD == origin/main == server HEAD.
 
-Local root:
-- /home/kyrie/cxprojects/SynSLP
+Do not add batch synthesis, OCR filtering, Qwen, model comparison, training, or dataset-generation logic.
 
-GitHub:
-- kyrie21z/SynSLP
+## 1. Capture the exact deployed compatibility delta
 
-Current known fact:
-- The local root exists but is not currently a Git repository.
-- Do not assume the remote is empty or assume any previously reported commit hash is still current; inspect GitHub/remote state first.
+Current known deployment:
+- SynSLP local: /home/kyrie/cxprojects/SynSLP
+- SynSLP server: server-zyx:/mnt/data/zyx/SynSLP
+- AnyText2 upstream commit: b06c583a583818f3679665ef67b51363f107853c
+- AnyText2 server checkout: /mnt/data/zyx/SynSLP/third_party/AnyText2
+- conda env: anytext2
 
-Actions:
-- Inspect local files, including hidden files, before any Git initialization or clone.
-- If local contains user files, preserve them; do not delete, overwrite, hard-reset, or force-push.
-- Inspect the GitHub repository and default branch.
-- Establish origin and main so local and GitHub contain the union of intended project files without losing either side.
-- Prefer normal Git history; if remote already has history, integrate safely instead of recreating it.
-- End with a clean working tree and local HEAD == origin/main.
-
-Verification:
-- local is a Git repository on branch main
-- origin points to kyrie21z/SynSLP
-- working tree clean
-- local HEAD == origin/main
-
-## 2. Sync GitHub → server
-
-Target:
-- server-zyx:/mnt/data/zyx/SynSLP
+Known manual compatibility fixes from the completed deployment:
+- setuptools 69.5.1 / setuptools<70
+- numpy==1.24.4
+- pytorch-lightning==1.9.5 / <2.0
+- Pillow==9.5.0
+- ldm/modules/attention.py: cast softmax similarity to v.dtype in fallback CrossAttention
+- ms_wrapper.py: defensive sort_priority fallback used by the working server deployment
 
 Actions:
-- Connect to server-zyx.
-- If target does not exist, clone from GitHub.
-- If target exists, inspect status first and preserve any uncommitted or unique server-side work.
-- Safely align server main with GitHub main.
-- Do not use destructive reset/force operations.
-- Do not use whole-repository scp/rsync as a substitute for Git synchronization.
+- Inspect the actual server AnyText2 git diff against the pinned upstream commit.
+- Inspect the actual installed versions in the working anytext2 environment.
+- Treat the working server deployment as the source of truth for compatibility changes; do not invent additional patches.
+- Reduce the captured delta to only what is required for the verified deployment.
 
-Verification:
-- local HEAD == origin/main == server HEAD
-- server working tree clean
+Acceptance:
+- exact source-code delta and package-version delta are known and reviewable before changing deployment automation.
 
-## 3. Deploy official AnyText2 on server only
+## 2. Encode reproducibility in SynSLP
 
-Start only after stages 1 and 2 pass.
+Make the smallest repository-controlled change that can recreate the working deployment.
 
-Upstream:
-- https://github.com/tyxsspa/AnyText2
+Preferred structure:
+- store the minimal AnyText2 source compatibility patch under a tracked path such as patches/anytext2/;
+- encode required compatibility package pins in a tracked file or directly in setup_anytext2.sh;
+- keep third_party/, checkpoints, caches, outputs, and the conda environment untracked.
 
-Purpose:
-- off-the-shelf synthetic SLP data generator only
-- no model architecture changes
-- no training or fine-tuning
+Update scripts/setup_anytext2.sh so that a fresh deployment deterministically:
+1. clones/fetches AnyText2;
+2. checks out the pinned upstream commit;
+3. creates/updates the isolated conda environment from upstream environment.yaml;
+4. enforces only the compatibility package pins proven necessary by the working deployment;
+5. applies the tracked compatibility patch idempotently;
+6. downloads/verifies the official iic/cv_anytext2 checkpoint;
+7. fails clearly on patch/version mismatch instead of silently continuing.
 
-Deployment constraints:
-- Use an isolated environment; prefer conda env name: anytext2.
-- Before installing, inspect server GPU, driver/CUDA, free disk space, conda, and Python state.
-- Reproduce the official AnyText2 environment as closely as practical; if exact official versions conflict with the server, make the minimum compatibility change and record it.
-- Keep third-party source, checkpoints, caches, and generated data out of Git unless a small explicit config/launcher is intentionally part of SynSLP.
-- Prefer FP16 inference where supported.
-- Disable optional prompt-translation components if they materially increase VRAM and are not needed for Chinese target-text editing.
-- Use the official/public checkpoint referenced by the AnyText2 project; record exact source and revision when possible.
+Constraints:
+- do not vendor AnyText2 source into SynSLP;
+- do not modify model architecture or inference behavior beyond the already-proven compatibility fixes;
+- do not rely on undocumented manual edits after setup;
+- preserve existing script behavior where it already works;
+- keep the patch tied to the pinned AnyText2 commit.
 
-## 4. Minimal deployment acceptance test
+## 3. Verify reproducibility without disturbing the working deployment
 
-Prove functionality, not just installation.
+Do not destroy or reset the verified anytext2 environment/checkpoint.
 
-Required checks:
-1. AnyText2 checkpoint loads successfully.
-2. CUDA inference runs successfully.
-3. A stock/example inference produces an output image.
-4. One Chinese ship-license-plate-oriented reference edit smoke test succeeds:
-   - reference image
-   - explicit text region/mask as required by AnyText2
-   - Chinese + digits target string
-   - saved edited output
+Minimum sufficient verification:
+- syntax/static check of changed deployment scripts;
+- prove the tracked patch cleanly applies to a fresh checkout of the pinned AnyText2 commit;
+- prove the encoded dependency constraints resolve to the intended compatibility versions;
+- if practical with the existing server resources, use an isolated disposable validation environment/name rather than modifying the working anytext2 environment;
+- run the existing check/smoke path against the resulting reproducible deployment when feasible.
 
-Record in repo-visible notes or deployment metadata:
-- GPU model / VRAM
-- Python, PyTorch, CUDA versions
-- AnyText2 upstream commit/revision
-- checkpoint source/revision
-- exact smoke-test command/config
-- input/output paths
-- encountered errors and the minimal fixes applied
+Required functional acceptance remains:
+- checkpoint loads;
+- CUDA + FP16 works;
+- stock inference produces an image;
+- Chinese + digits SLP reference edit produces an image.
+
+If a full disposable reinstall is disproportionately expensive, do not fake it:
+- explicitly record which parts were independently recreated;
+- at minimum require fresh-checkout patch application plus dependency-version verification plus rerun of the existing working smoke test.
+
+## 4. Commit, push, and re-sync server
+
+After reproducibility changes pass:
+- commit only the intended tracked SynSLP changes;
+- push main to origin;
+- update server-zyx:/mnt/data/zyx/SynSLP from origin/main using normal Git synchronization;
+- preserve untracked third_party/checkpoints/outputs and the working conda environment;
+- do not hard reset, force push, or delete deployment artifacts.
+
+Final acceptance:
+- local working tree clean;
+- server working tree clean for tracked files;
+- local HEAD == origin/main == server HEAD;
+- setup assets contain all compatibility steps required by the verified AnyText2 deployment;
+- existing AnyText2 smoke test still passes after the tracked changes.
 
 ## Stop condition
 
-Stop immediately after the smoke test is reproducibly successful.
+Stop once both original gaps are closed and evidenced:
+1. clean deployment reproducibility is encoded and verified to the extent stated above;
+2. all three Git endpoints are on the same final commit.
 
-Out of scope:
-- batch synthesis pipeline
-- OCR exact-match filtering
-- dataset sampling policy
-- Qwen-Image-Edit
-- AnyText2 training/fine-tuning
-- model comparison or downstream SLPR training
+Record in .ai-bridge/agent-status.md:
+- final commit SHA on local/origin/server;
+- tracked files added/changed;
+- exact compatibility patch contents;
+- exact dependency pins;
+- verification commands and results;
+- whether verification used a fresh disposable environment or only fresh-checkout + dependency checks;
+- any residual reproducibility limitation.
+
+Do not proceed to synthetic-data pipeline design or generation.
 
 ## Implementation contract
 

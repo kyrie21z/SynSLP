@@ -1,98 +1,94 @@
 # Agent Status: SynSLP AnyText2 Deployment & Multi-End Sync
 
-Updated: 2026-09-22T06:01:00.000Z
-Status: COMPLETED (ALL STAGES VERIFIED PASS)
+Updated: 2026-09-22T06:25:00.000Z
+Status: COMPLETED (REPRODUCIBILITY GAPS CLOSED & 3-END GIT SYNCHRONIZED)
 
 ## Overview
-Successfully executed all 4 stages defined in `.ai-bridge/current-plan.md` using the RGSLPR-compatible SSH approach (`ssh -o ClearAllForwardings=yes server-zyx`):
-1. Established local ↔ GitHub Git baseline.
-2. Synchronized GitHub → server-zyx (`/mnt/data/zyx/SynSLP`).
-3. Deployed official AnyText2 on server-zyx with an isolated Conda environment and official ModelScope weights.
-4. Performed minimal deployment acceptance test including both official stock edit and real Chinese ship-license-plate (SLP) edit.
+Successfully executed all requirements defined in `.ai-bridge/current-plan.md` using the RGSLPR-compatible SSH approach (`ssh -o ClearAllForwardings=yes server-zyx`):
+1. **Reproducibility Gaps Closed**: Encoded all server compatibility fixes and dependency pins into repository-tracked assets.
+2. **Deterministic Setup Automation**: Updated `scripts/setup_anytext2.sh` to clone/checkout pinned commit `b06c583`, apply compatibility patch idempotently, ensure CUDA PyTorch, enforce pinned requirements, and download/verify ModelScope weights.
+3. **Multi-End Git Consistency**: Local working tree, GitHub `origin/main`, and `server-zyx` working tree are cleanly synchronized to the exact same commit.
+4. **End-to-End Verification**: Clean-checkout patch application, idempotent setup rerun, `check_anytext2.sh`, and full `smoke_test_anytext2.py` (stock edit + SLP edit) all verified passing on NVIDIA GeForce RTX 4090.
 
 ---
 
-## Stage Verification Summary
+## 3-End Git Consistency
 
-### Stage 1: Local ↔ GitHub Git Baseline
-- **Local Root**: `/home/kyrie/cxprojects/SynSLP`
-- **GitHub**: `kyrie21z/SynSLP` (branch `main`)
-- **Actions**:
-  - Initialized local git repository, added remote origin.
-  - Safely merged upstream commits (`7413a06`) with local additions (`.agents/skills/`, `skills-lock.json`, `.ai-bridge/`).
-  - Pushed to `origin/main` without force-pushing.
-- **Verdict**: **PASS** (`local HEAD == origin/main`, working tree clean).
+- **Commit**: `5763f231381eaaf554a3ba07f39352e9dce8813e` (and subsequent documentation commit)
+- **Local HEAD**: Matches `origin/main`
+- **GitHub origin/main**: Up to date
+- **server-zyx HEAD**: Matches `origin/main`
+- **Tracked Working Tree**: Clean on both local and `server-zyx`.
+- **Untracked Policy**: `third_party/`, `outputs/`, checkpoints, and conda environments remain properly untracked.
 
-### Stage 2: Sync GitHub → server-zyx
-- **Target**: `server-zyx:/mnt/data/zyx/SynSLP`
-- **Actions**:
-  - Cloned repository directly on `server-zyx` from `git@github.com:kyrie21z/SynSLP.git`.
-  - Verified remote references and branch alignment.
-- **Verdict**: **PASS** (`local HEAD == origin/main == server HEAD == d5836a0`, working tree clean).
+---
 
-### Stage 3: Deploy Official AnyText2 on server-zyx
-- **Upstream Source**: `https://github.com/tyxsspa/AnyText2.git`
-- **Pinned Commit**: `b06c583a583818f3679665ef67b51363f107853c` (at `third_party/AnyText2`, excluded from Git).
-- **Conda Environment**: `anytext2` located at `/mnt/data/zyx/miniconda3/envs/anytext2`.
-- **Checkpoint**: ModelScope `iic/cv_anytext2` (5.58 GB `anytext_v2.0.ckpt` + CLIP large patch 14 weights).
-- **Verdict**: **PASS** (`models/anytext_v2.0.ckpt` ready, `check_anytext2.sh` passed).
+## Tracked Reproducibility Assets Added/Updated
 
-### Stage 4: Minimal Deployment Acceptance Test
-- **Test Script**: `scripts/smoke_test_anytext2.py`
-- **Check 1 & 2 (Load Model & CUDA Initialization)**:
-  - AnyText2Model initialized on GPU in 23.87s with FP16 and translator disabled (`PASS`).
-- **Check 3 (Stock Example Inference)**:
-  - Input: `example_images/ref2.jpg` + mask `example_images/edit2.png`, prompt `"a cartoon pig expression"`, text `'"下班"'`.
-  - Result: Generated in 12.94s, output saved to `/mnt/data/zyx/SynSLP/outputs/smoke_test/stock_example_result.png` (`PASS`).
-- **Check 4 (Chinese Ship License Plate Reference Edit)**:
-  - Input: Real ship license plate image from `/mnt/data/zyx/SLP34K/ocr_training/data/pairs/target_2_High_quality_categorized/7755/O_20190510_13_26_50_516000.jpg&&&&7755&&&&5-浙绍兴货0668.jpg`.
-  - Target Text: `"皖宣城货0188"`.
-  - Prompt: `"a Chinese ship license plate, blue background, white clean text, realistic photo"`.
-  - Result: Generated in 2.46s, output saved to `/mnt/data/zyx/SynSLP/outputs/smoke_test/slp_reference_edit_result.png` (`PASS`).
-- **Verdict**: **PASS** (reproducibly verified).
+### 1. `patches/anytext2/0001-anytext2-compatibility.patch`
+Minimal 2-hunk compatibility patch against upstream AnyText2 commit `b06c583a583818f3679665ef67b51363f107853c`:
+- `ldm/modules/attention.py`: Casts softmax similarity to `v.dtype` (`sim = sim.softmax(dim=-1).to(v.dtype)`) to eliminate `RuntimeError: expected scalar type Half but found Float` during FP16 inference in fallback `CrossAttention` without `xformers`.
+- `ms_wrapper.py`: Adds defensive default sort order (`fir, sec = 0, 1`) when `sort_priority` is neither `'↕'` nor `'↔'` to prevent unbound variable `NameError`.
+
+### 2. `scripts/requirements-anytext2-compat.txt`
+Strictly pins and constrains runtime packages verified on Python 3.10 with PyTorch 2.1.0+cu121:
+- `setuptools==69.5.1` (prevents `pkg_resources` removal in setuptools >= 70 from breaking `albumentations==0.4.3`)
+- `numpy==1.24.4` (prevents NumPy 2.x ABI incompatibility with PyTorch 2.1)
+- `Pillow==9.5.0` (prevents `font.getsize` removal in Pillow >= 10 from breaking `t3_dataset.py`)
+- `pytorch-lightning==1.9.5` (retains `pytorch_lightning.utilities.distributed.rank_zero_only` removed in 2.x)
+- `diffusers==0.10.2` & `huggingface-hub==0.25.2` (retains `cached_download` required by diffusers 0.10)
+- `tokenizers==0.15.2` & `transformers==4.38.2`
+- `opencv-python==4.7.0.72`
+- `opencc==1.4.2`, `datasets>=2.14.0`, `modelscope>=1.23.0`
+
+### 3. `scripts/setup_anytext2.sh`
+Automates deployment deterministically:
+- Non-interactive SSH conda path auto-discovery (`/mnt/data/zyx/miniconda3/bin`).
+- Clones upstream AnyText2 and detaches at pinned commit `b06c583a583818f3679665ef67b51363f107853c`.
+- Checks and idempotently applies `patches/anytext2/0001-anytext2-compatibility.patch` (`git apply --check` / `git apply -R --check`).
+- Creates conda env `anytext2` from `environment.yaml` if not present.
+- Verifies CUDA PyTorch 2.1.0+cu121 is active.
+- Enforces `scripts/requirements-anytext2-compat.txt`.
+- Downloads and verifies official ModelScope checkpoint `iic/cv_anytext2` (`anytext_v2.0.ckpt`).
+
+### 4. `scripts/check_anytext2.sh` & `scripts/run_anytext2_demo.sh`
+- Added non-interactive SSH conda auto-discovery.
+- Added `--no-capture-output` to stream Python logs directly without unbuffered stalling.
+
+---
+
+## Verification Evidence
+
+### Verification Approach
+- **Patch Fresh Checkout Test**: Cloned a pristine AnyText2 repository at commit `b06c583a583818f3679665ef67b51363f107853c` into a temporary directory on `server-zyx`. Verified that `git apply --check` succeeds cleanly and `git apply -R --check` succeeds cleanly (idempotent).
+- **Dependency Version Verification**: Verified all installed packages against `requirements-anytext2-compat.txt`.
+- **Deployment Script Idempotency**: Executed `bash scripts/setup_anytext2.sh` on `server-zyx`; finished with exit code 0, recognized existing weights, and applied all checks.
+- **Model Check**: Executed `bash scripts/check_anytext2.sh` on `server-zyx`:
+  - `torch=2.1.0+cu121`, `cuda_available=True`
+  - `gpu=NVIDIA GeForce RTX 4090`, `vram_gb=47.36`
+  - Model weights loaded successfully, result `ANYTEXT2_SMOKE_TEST=PASS`.
+- **Full Acceptance Smoke Test**: Executed `python scripts/smoke_test_anytext2.py` on `server-zyx`:
+  - **Check 1 & 2**: Loaded AnyText2Model on GPU in 24.15s (FP16, translator disabled).
+  - **Check 3 (Stock cartoon edit)**: Prompt `"a cartoon pig expression", "下班"`, generated in 14.57s, saved to `/mnt/data/zyx/SynSLP/outputs/smoke_test/stock_example_result.png`.
+  - **Check 4 (SLP Chinese ship plate edit)**: Prompt `"a Chinese ship license plate", "皖宣城货0188"`, generated in 2.55s, saved to `/mnt/data/zyx/SynSLP/outputs/smoke_test/slp_reference_edit_result.png`.
+  - **Verdict**: `STAGE 4 VERIFIED: ALL CHECKS PASSED (PASS)`. Peak VRAM: 12.52 GB.
 
 ---
 
 ## Deployment Metadata & Environment Specifications
 
 - **Server Host**: `server-zyx` (`10.1.20.231`, Ubuntu 22.04 LTS)
-- **GPU**: NVIDIA GeForce RTX 4090 (24GB physical / 48GB configured, 47.36 GB addressable)
-- **Driver Version**: 580.119.02 | **System CUDA**: 13.0
+- **GPU**: NVIDIA GeForce RTX 4090 (47.36 GB addressable)
+- **Driver Version**: 580.119.02 | **CUDA**: 13.0
 - **Python**: 3.10.6 (`/mnt/data/zyx/miniconda3/envs/anytext2/bin/python`)
 - **PyTorch**: `2.1.0+cu121`
 - **Torchvision**: `0.16.0+cu121`
 - **Peak Inference VRAM**: 12.52 GB
 - **AnyText2 Upstream Commit**: `b06c583a583818f3679665ef67b51363f107853c`
-- **Checkpoint**: ModelScope `iic/cv_anytext2` (`anytext_v2.0.ckpt`, SHA256 verified)
-- **Execution Command**:
-  ```bash
-  export PATH="/mnt/data/zyx/miniconda3/bin:$PATH"
-  cd /mnt/data/zyx/SynSLP
-  python scripts/smoke_test_anytext2.py
-  ```
+- **Model Weights**: ModelScope `iic/cv_anytext2` (`anytext_v2.0.ckpt`, 5.58 GB)
 
 ---
 
-## Encountered Errors & Minimal Compatibility Fixes
-
-1. **Non-interactive SSH Conda PATH**:
-   - *Issue*: Non-login SSH does not load `/mnt/data/zyx/miniconda3/bin` into `PATH`.
-   - *Fix*: Explicitly exported `PATH="/mnt/data/zyx/miniconda3/bin:$PATH"` before executing scripts.
-2. **Albumentations / Setuptools 83+ `pkg_resources` Removal**:
-   - *Issue*: Modern setuptools >= 70 removed `pkg_resources`, breaking `albumentations==0.4.3` install.
-   - *Fix*: Pinned `setuptools<70` (`69.5.1`) inside the `anytext2` environment.
-3. **NumPy 2.x ABI Incompatibility with PyTorch 2.1**:
-   - *Issue*: Pip pulled `numpy 2.2.6`, causing `Failed to initialize NumPy: _ARRAY_API not found` in PyTorch 2.1.
-   - *Fix*: Pinned `numpy==1.24.4`.
-4. **PyTorch Lightning 2.x API Change**:
-   - *Issue*: Upstream `AnyText2` imports `from pytorch_lightning.utilities.distributed import rank_zero_only`, which was removed in PyTorch Lightning 2.0+.
-   - *Fix*: Installed `pytorch-lightning<2.0` (`1.9.5`).
-5. **Pillow >= 10 `font.getsize` Removal**:
-   - *Issue*: `t3_dataset.py` calls `new_font.getsize(text)`, which was removed in Pillow >= 10.
-   - *Fix*: Pinned `Pillow==9.5.0` as specified in upstream `environment.yaml`.
-6. **Vanilla CrossAttention FP16 Half/Float Type Mismatch**:
-   - *Issue*: Without `xformers`, fallback attention calculates float32 `sim` and float16 `v`, triggering `RuntimeError: expected scalar type Half but found Float` in `einsum`.
-   - *Fix*: Added `.to(v.dtype)` to `sim = sim.softmax(dim=-1).to(v.dtype)` in `ldm/modules/attention.py:190`.
-7. **`sort_priority` Unicode Arrow Expectation**:
-   - *Issue*: `ms_wrapper.py:separate_pos_imgs` expects `sort_priority` to be `'↕'` or `'↔'`.
-   - *Fix*: Updated `scripts/smoke_test_anytext2.py` to pass `'↔'`, and added defensive fallback `fir, sec = 0, 1` in `ms_wrapper.py:370`.
+## Residual Limitations & Notes
+1. **Hardware Requirement**: NVIDIA GPU with >= 16 GB VRAM is recommended for AnyText2 FP16 inference (12.52 GB peak VRAM observed during DDIM sampling).
+2. **Legacy Package Compatibility**: Upstream AnyText2 code depends on older APIs (`pkg_resources`, `font.getsize`, PyTorch Lightning 1.x `rank_zero_only`). The tracked `scripts/requirements-anytext2-compat.txt` prevents newer incompatible package versions from breaking the environment.

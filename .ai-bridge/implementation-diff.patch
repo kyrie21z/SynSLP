@@ -1,1555 +1,219 @@
-diff --git a/.agents/skills/code-review/SKILL.md b/.agents/skills/code-review/SKILL.md
+diff --git a/patches/anytext2/0001-anytext2-compatibility.patch b/patches/anytext2/0001-anytext2-compatibility.patch
 new file mode 100644
-index 0000000..2d276fe
+index 0000000..3b962e2
 --- /dev/null
-+++ b/.agents/skills/code-review/SKILL.md
-@@ -0,0 +1,87 @@
-+---
-+name: code-review
-+description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes — Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
-+---
++++ b/patches/anytext2/0001-anytext2-compatibility.patch
+@@ -0,0 +1,26 @@
++diff --git a/ldm/modules/attention.py b/ldm/modules/attention.py
++index 2ae1fb8..e20c452 100644
++--- a/ldm/modules/attention.py
+++++ b/ldm/modules/attention.py
++@@ -187,7 +187,7 @@ class CrossAttention(nn.Module):
++             sim.masked_fill_(~mask, max_neg_value)
++ 
++         # attention, what we cannot get enough of
++-        sim = sim.softmax(dim=-1)
+++        sim = sim.softmax(dim=-1).to(v.dtype)
++ 
++         out = einsum('b i j, b j d -> b i d', sim, v)
++         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
++diff --git a/ms_wrapper.py b/ms_wrapper.py
++index 5184798..16a773d 100644
++--- a/ms_wrapper.py
+++++ b/ms_wrapper.py
++@@ -367,6 +367,8 @@ class AnyText2Model(TorchModel):
++             fir, sec = 1, 0  # top-down first
++         elif sort_priority == '↔':
++             fir, sec = 0, 1  # left-right first
+++        else:
+++            fir, sec = 0, 1  # default left-right
++         components.sort(key=lambda c: (c[1][fir]//gap, c[1][sec]//gap))
++         sorted_components = [c[0] for c in components]
++         return sorted_components
+diff --git a/scripts/check_anytext2.sh b/scripts/check_anytext2.sh
+index f217ade..b50244e 100644
+--- a/scripts/check_anytext2.sh
++++ b/scripts/check_anytext2.sh
+@@ -5,12 +5,21 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ ANYTEXT2_DIR="$ROOT_DIR/third_party/AnyText2"
+ ENV_NAME="anytext2"
+ 
++if ! command -v conda >/dev/null 2>&1; then
++  for candidate in "/mnt/data/zyx/miniconda3/bin" "$HOME/miniconda3/bin" "$HOME/anaconda3/bin"; do
++    if [[ -x "$candidate/conda" ]]; then
++      export PATH="$candidate:$PATH"
++      break
++    fi
++  done
++fi
 +
-+Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
-+
-+- **Standards** — does the code conform to this repo's documented coding standards?
-+- **Spec** — does the code faithfully implement the originating issue / spec?
-+
-+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
-+
-+The issue tracker should have been provided to you — run `/setup-matt-pocock-skills` if `docs/agents/issue-tracker.md` is missing.
-+
-+## Process
-+
-+### 1. Pin the fixed point
-+
-+Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
-+
-+Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
-+
-+Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside two parallel sub-agents.
-+
-+### 2. Identify the spec source
-+
-+Look for the originating spec, in this order:
-+
-+1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) — fetch via the workflow in `docs/agents/issue-tracker.md`.
-+2. A path the user passed as an argument.
-+3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
-+4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
-+
-+### 3. Identify the standards sources
-+
-+Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
-+
-+On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below — a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
-+
-+- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
-+- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation — and, like any standard here, skip anything tooling already enforces.
-+
-+Each smell reads *what it is* → *how to fix*; match it against the diff:
-+
-+- **Mysterious Name** — a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
-+- **Duplicated Code** — the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
-+- **Feature Envy** — a method that reaches into another object's data more than its own. → move the method onto the data it envies.
-+- **Data Clumps** — the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.
-+- **Primitive Obsession** — a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.
-+- **Repeated Switches** — the same `switch`/`if`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.
-+- **Shotgun Surgery** — one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.
-+- **Divergent Change** — one file or module is edited for several unrelated reasons. → split so each module changes for one reason.
-+- **Speculative Generality** — abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.
-+- **Message Chains** — long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
-+- **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.
-+- **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
-+
-+### 4. Spawn both sub-agents in parallel
-+
-+**Standards sub-agent prompt** — include:
-+
-+- The full diff command and commit list.
-+- The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
-+- The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
-+
-+**Spec sub-agent prompt** — include:
-+
-+- The diff command and commit list.
-+- The path or fetched contents of the spec.
-+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
-+
-+If the spec is missing, skip the Spec sub-agent and note this in the final report.
-+
-+### 5. Aggregate
-+
-+Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_).
-+
-+End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
-+
-+## Why two axes
-+
-+A change can pass one axis and fail the other:
-+
-+- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**
-+- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
-+
-+Reporting them separately stops one axis from masking the other.
-diff --git a/.agents/skills/code-review/agents/openai.yaml b/.agents/skills/code-review/agents/openai.yaml
+ [[ -d "$ANYTEXT2_DIR" ]] || { echo "ERROR: $ANYTEXT2_DIR not found. Run scripts/setup_anytext2.sh first."; exit 1; }
+ [[ -f "$ANYTEXT2_DIR/models/anytext_v2.0.ckpt" ]] || { echo "ERROR: AnyText2 checkpoint not found."; exit 1; }
+ 
+ cd "$ANYTEXT2_DIR"
+ 
+-conda run -n "$ENV_NAME" python - <<'PY'
++conda run --no-capture-output -n "$ENV_NAME" python - <<'PY'
+ import torch
+ 
+ print(f"torch={torch.__version__}")
+diff --git a/scripts/requirements-anytext2-compat.txt b/scripts/requirements-anytext2-compat.txt
 new file mode 100644
-index 0000000..9076774
+index 0000000..f61957f
 --- /dev/null
-+++ b/.agents/skills/code-review/agents/openai.yaml
-@@ -0,0 +1,3 @@
-+interface:
-+  display_name: "Code Review"
-+  short_description: "Review a diff on standards and spec"
-diff --git a/.agents/skills/codebase-design/DEEPENING.md b/.agents/skills/codebase-design/DEEPENING.md
-new file mode 100644
-index 0000000..3938457
---- /dev/null
-+++ b/.agents/skills/codebase-design/DEEPENING.md
-@@ -0,0 +1,37 @@
-+# Deepening
-+
-+How to deepen a cluster of shallow modules safely, given its dependencies. Assumes the vocabulary in [SKILL.md](SKILL.md) — **module**, **interface**, **seam**, **adapter**.
-+
-+## Dependency categories
-+
-+When assessing a candidate for deepening, classify its dependencies. The category determines how the deepened module is tested across its seam.
-+
-+### 1. In-process
-+
-+Pure computation, in-memory state, no I/O. Always deepenable — merge the modules and test through the new interface directly. No adapter needed.
-+
-+### 2. Local-substitutable
-+
-+Dependencies that have local test stand-ins (PGLite for Postgres, in-memory filesystem). Deepenable if the stand-in exists. The deepened module is tested with the stand-in running in the test suite. The seam is internal; no port at the module's external interface.
-+
-+### 3. Remote but owned (Ports & Adapters)
-+
-+Your own services across a network boundary (microservices, internal APIs). Define a **port** (interface) at the seam. The deep module owns the logic; the transport is injected as an **adapter**. Tests use an in-memory adapter. Production uses an HTTP/gRPC/queue adapter.
-+
-+Recommendation shape: *"Define a port at the seam, implement an HTTP adapter for production and an in-memory adapter for testing, so the logic sits in one deep module even though it's deployed across a network."*
-+
-+### 4. True external (Mock)
-+
-+Third-party services (Stripe, Twilio, etc.) you don't control. The deepened module takes the external dependency as an injected port; tests provide a mock adapter.
-+
-+## Seam discipline
-+
-+- **One adapter means a hypothetical seam. Two adapters means a real one.** Don't introduce a port unless at least two adapters are justified (typically production + test). A single-adapter seam is just indirection.
-+- **Internal seams vs external seams.** A deep module can have internal seams (private to its implementation, used by its own tests) as well as the external seam at its interface. Don't expose internal seams through the interface just because tests use them.
-+
-+## Testing strategy: replace, don't layer
-+
-+- Old unit tests on shallow modules become waste once tests at the deepened module's interface exist — delete them.
-+- Write new tests at the deepened module's interface. The **interface is the test surface**.
-+- Tests assert on observable outcomes through the interface, not internal state.
-+- Tests should survive internal refactors — they describe behaviour, not implementation. If a test has to change when the implementation changes, it's testing past the interface.
-diff --git a/.agents/skills/codebase-design/DESIGN-IT-TWICE.md b/.agents/skills/codebase-design/DESIGN-IT-TWICE.md
-new file mode 100644
-index 0000000..8419ad6
---- /dev/null
-+++ b/.agents/skills/codebase-design/DESIGN-IT-TWICE.md
-@@ -0,0 +1,44 @@
-+# Design It Twice
-+
-+When the user wants to explore alternative interfaces for a chosen deepening candidate, use this parallel sub-agent pattern. Based on "Design It Twice" (Ousterhout) — your first idea is unlikely to be the best.
-+
-+Uses the vocabulary in [SKILL.md](SKILL.md) — **module**, **interface**, **seam**, **adapter**, **leverage**.
-+
-+## Process
-+
-+### 1. Frame the problem space
-+
-+Before spawning sub-agents, write a user-facing explanation of the problem space for the chosen candidate:
-+
-+- The constraints any new interface would need to satisfy
-+- The dependencies it would rely on, and which category they fall into (see [DEEPENING.md](DEEPENING.md))
-+- A rough illustrative code sketch to ground the constraints — not a proposal, just a way to make the constraints concrete
-+
-+Show this to the user, then immediately proceed to Step 2. The user reads and thinks while the sub-agents work in parallel.
-+
-+### 2. Spawn sub-agents
-+
-+Spawn 3+ sub-agents in parallel. Each must produce a **radically different** interface for the deepened module.
-+
-+Prompt each sub-agent with a separate technical brief (file paths, coupling details, dependency category from [DEEPENING.md](DEEPENING.md), what sits behind the seam). The brief is independent of the user-facing problem-space explanation in Step 1. Give each agent a different design constraint:
-+
-+- Agent 1: "Minimize the interface — aim for 1–3 entry points max. Maximise leverage per entry point."
-+- Agent 2: "Maximise flexibility — support many use cases and extension."
-+- Agent 3: "Optimise for the most common caller — make the default case trivial."
-+- Agent 4 (if applicable): "Design around ports & adapters for cross-seam dependencies."
-+
-+Include both [SKILL.md](SKILL.md) vocabulary and CONTEXT.md vocabulary in the brief so each sub-agent names things consistently with the architecture language and the project's domain language.
-+
-+Each sub-agent outputs:
-+
-+1. Interface (types, methods, params — plus invariants, ordering, error modes)
-+2. Usage example showing how callers use it
-+3. What the implementation hides behind the seam
-+4. Dependency strategy and adapters (see [DEEPENING.md](DEEPENING.md))
-+5. Trade-offs — where leverage is high, where it's thin
-+
-+### 3. Present and compare
-+
-+Present designs sequentially so the user can absorb each one, then compare them in prose. Contrast by **depth** (leverage at the interface), **locality** (where change concentrates), and **seam placement**.
-+
-+After comparing, give your own recommendation: which design you think is strongest and why. If elements from different designs would combine well, propose a hybrid. Be opinionated — the user wants a strong read, not a menu.
-diff --git a/.agents/skills/codebase-design/SKILL.md b/.agents/skills/codebase-design/SKILL.md
-new file mode 100644
-index 0000000..16620c2
---- /dev/null
-+++ b/.agents/skills/codebase-design/SKILL.md
-@@ -0,0 +1,114 @@
-+---
-+name: codebase-design
-+description: Shared vocabulary for designing deep modules. Use when the user wants to design or improve a module's interface, find deepening opportunities, decide where a seam goes, make code more testable or AI-navigable, or when another skill needs the deep-module vocabulary.
-+---
-+
-+# Codebase Design
-+
-+Design **deep modules**: a lot of behaviour behind a small interface, placed at a clean seam, testable through that interface. Use this language and these principles wherever code is being designed or restructured. The aim is leverage for callers, locality for maintainers, and testability for everyone.
-+
-+## Glossary
-+
-+Use these terms exactly — don't substitute "component," "service," "API," or "boundary." Consistent language is the whole point.
-+
-+**Module** — anything with an interface and an implementation. Deliberately scale-agnostic: a function, class, package, or tier-spanning slice. _Avoid_: unit, component, service.
-+
-+**Interface** — everything a caller must know to use the module correctly: the type signature, but also invariants, ordering constraints, error modes, required configuration, and performance characteristics. _Avoid_: API, signature (too narrow — they refer only to the type-level surface).
-+
-+**Implementation** — what's inside a module, its body of code. Distinct from **Adapter**: a thing can be a small adapter with a large implementation (a Postgres repo) or a large adapter with a small implementation (an in-memory fake). Reach for "adapter" when the seam is the topic; "implementation" otherwise.
-+
-+**Depth** — leverage at the interface: the amount of behaviour a caller (or test) can exercise per unit of interface they have to learn. A module is **deep** when a large amount of behaviour sits behind a small interface, **shallow** when the interface is nearly as complex as the implementation.
-+
-+**Seam** _(Michael Feathers)_ — a place where you can alter behaviour without editing in that place; the *location* at which a module's interface lives. Where to put the seam is its own design decision, distinct from what goes behind it. _Avoid_: boundary (overloaded with DDD's bounded context).
-+
-+**Adapter** — a concrete thing that satisfies an interface at a seam. Describes *role* (what slot it fills), not substance (what's inside).
-+
-+**Leverage** — what callers get from depth: more capability per unit of interface they learn. One implementation pays back across N call sites and M tests.
-+
-+**Locality** — what maintainers get from depth: change, bugs, knowledge, and verification concentrate in one place rather than spreading across callers. Fix once, fixed everywhere.
-+
-+## Deep vs shallow
-+
-+**Deep module** = small interface + lots of implementation:
-+
-+```
-+┌─────────────────────┐
-+│   Small Interface   │  ← Few methods, simple params
-+├─────────────────────┤
-+│                     │
-+│  Deep Implementation│  ← Complex logic hidden
-+│                     │
-+└─────────────────────┘
-+```
-+
-+**Shallow module** = large interface + little implementation (avoid):
-+
-+```
-+┌─────────────────────────────────┐
-+│       Large Interface           │  ← Many methods, complex params
-+├─────────────────────────────────┤
-+│  Thin Implementation            │  ← Just passes through
-+└─────────────────────────────────┘
-+```
-+
-+When designing an interface, ask:
-+
-+- Can I reduce the number of methods?
-+- Can I simplify the parameters?
-+- Can I hide more complexity inside?
-+
-+## Principles
-+
-+- **Depth is a property of the interface, not the implementation.** A deep module can be internally composed of small, mockable, swappable parts — they just aren't part of the interface. A module can have **internal seams** (private to its implementation, used by its own tests) as well as the **external seam** at its interface.
-+- **The deletion test.** Imagine deleting the module. If complexity vanishes, it was a pass-through. If complexity reappears across N callers, it was earning its keep.
-+- **The interface is the test surface.** Callers and tests cross the same seam. If you want to test *past* the interface, the module is probably the wrong shape.
-+- **One adapter means a hypothetical seam. Two adapters means a real one.** Don't introduce a seam unless something actually varies across it.
-+
-+## Designing for testability
-+
-+Good interfaces make testing natural:
-+
-+1. **Accept dependencies, don't create them.**
-+
-+   ```typescript
-+   // Testable
-+   function processOrder(order, paymentGateway) {}
-+
-+   // Hard to test
-+   function processOrder(order) {
-+     const gateway = new StripeGateway();
-+   }
-+   ```
-+
-+2. **Return results, don't produce side effects.**
-+
-+   ```typescript
-+   // Testable
-+   function calculateDiscount(cart): Discount {}
-+
-+   // Hard to test
-+   function applyDiscount(cart): void {
-+     cart.total -= discount;
-+   }
-+   ```
-+
-+3. **Small surface area.** Fewer methods = fewer tests needed. Fewer params = simpler test setup.
-+
-+## Relationships
-+
-+- A **Module** has exactly one **Interface** (the surface it presents to callers and tests).
-+- **Depth** is a property of a **Module**, measured against its **Interface**.
-+- A **Seam** is where a **Module**'s **Interface** lives.
-+- An **Adapter** sits at a **Seam** and satisfies the **Interface**.
-+- **Depth** produces **Leverage** for callers and **Locality** for maintainers.
-+
-+## Rejected framings
-+
-+- **Depth as ratio of implementation-lines to interface-lines** (Ousterhout): rewards padding the implementation. We use depth-as-leverage instead.
-+- **"Interface" as the TypeScript `interface` keyword or a class's public methods**: too narrow — interface here includes every fact a caller must know.
-+- **"Boundary"**: overloaded with DDD's bounded context. Say **seam** or **interface**.
-+
-+## Going deeper
-+
-+- **Deepening a cluster given its dependencies** — see [DEEPENING.md](DEEPENING.md): dependency categories, seam discipline, and replace-don't-layer testing.
-+- **Exploring alternative interfaces** — see [DESIGN-IT-TWICE.md](DESIGN-IT-TWICE.md): spin up parallel sub-agents to design the interface several radically different ways, then compare on depth, locality, and seam placement.
-diff --git a/.agents/skills/codebase-design/agents/openai.yaml b/.agents/skills/codebase-design/agents/openai.yaml
-new file mode 100644
-index 0000000..3180715
---- /dev/null
-+++ b/.agents/skills/codebase-design/agents/openai.yaml
-@@ -0,0 +1,3 @@
-+interface:
-+  display_name: "Codebase Design"
-+  short_description: "Vocabulary for deep-module design"
-diff --git a/.agents/skills/diagnosing-bugs/SKILL.md b/.agents/skills/diagnosing-bugs/SKILL.md
-new file mode 100644
-index 0000000..7f8acf7
---- /dev/null
-+++ b/.agents/skills/diagnosing-bugs/SKILL.md
-@@ -0,0 +1,140 @@
-+---
-+name: diagnosing-bugs
-+description: Diagnosis loop for hard bugs and performance regressions. Use when the user says "diagnose"/"debug this", or reports something broken/throwing/failing/slow.
-+---
-+
-+# Diagnosing Bugs
-+
-+A discipline for hard bugs. Skip phases only when explicitly justified.
-+
-+When exploring the codebase, read `CONTEXT.md` (if it exists) to get a clear mental model of the relevant modules, and check ADRs in the area you're touching.
-+
-+## Redact
-+
-+This skill has you show commands, outputs and captured artifacts. **Redact every secret first** — write `<REDACTED>` in its place. Build loops against env vars, so the credential stays in the environment rather than in what you show. Captured artifacts carry auth headers: quote only the lines that carry the signal.
-+
-+If the redacted output is not enough to diagnose the bug, say so and ask the user.
-+
-+## Phase 1 — Build a feedback loop
-+
-+**This is the skill.** Everything else is mechanical. If you have a **tight** pass/fail signal for the bug — one that goes red on _this_ bug — you will find the cause; bisection, hypothesis-testing, and instrumentation all just consume it. If you don't have one, no amount of staring at code will save you.
-+
-+Spend disproportionate effort here. **Be aggressive. Be creative. Refuse to give up.**
-+
-+### Ways to construct one — try them in roughly this order
-+
-+1. **Failing test** at whatever seam reaches the bug — unit, integration, e2e.
-+2. **Curl / HTTP script** against a running dev server.
-+3. **CLI invocation** with a fixture input, diffing stdout against a known-good snapshot.
-+4. **Headless browser script** (Playwright / Puppeteer) — drives the UI, asserts on DOM/console/network.
-+5. **Replay a captured trace.** Save a real network request / payload / event log to disk; replay it through the code path in isolation.
-+6. **Throwaway harness.** Spin up a minimal subset of the system (one service, mocked deps) that exercises the bug code path with a single function call.
-+7. **Property / fuzz loop.** If the bug is "sometimes wrong output", run 1000 random inputs and look for the failure mode.
-+8. **Bisection harness.** If the bug appeared between two known states (commit, dataset, version), automate "boot at state X, check, repeat" so you can `git bisect run` it.
-+9. **Differential loop.** Run the same input through old-version vs new-version (or two configs) and diff outputs.
-+10. **HITL bash script.** Last resort. If a human must click, drive _them_ with `scripts/hitl-loop.template.sh` so the loop is still structured. Captured output feeds back to you.
-+
-+Build the right feedback loop, and the bug is 90% fixed.
-+
-+### Tighten the loop
-+
-+Treat the loop as a product. Once you have _a_ loop, **tighten** it:
-+
-+- Can I make it faster? (Cache setup, skip unrelated init, narrow the test scope.)
-+- Can I make the signal sharper? (Assert on the specific symptom, not "didn't crash".)
-+- Can I make it more deterministic? (Pin time, seed RNG, isolate filesystem, freeze network.)
-+
-+A 30-second flaky loop is barely better than no loop; a 2-second deterministic one is tight — a debugging superpower.
-+
-+### Non-deterministic bugs
-+
-+The goal is not a clean repro but a **higher reproduction rate**. Loop the trigger 100×, parallelise, add stress, narrow timing windows, inject sleeps. A 50%-flake bug is debuggable; 1% is not — keep raising the rate until it's debuggable.
-+
-+### When you genuinely cannot build a loop
-+
-+Stop and say so explicitly. List what you tried. Ask the user for: (a) access to whatever environment reproduces it, (b) a redacted captured artifact (HAR file, log dump, core dump, screen recording with timestamps), or (c) permission to add temporary production instrumentation. Do **not** proceed to hypothesise without a loop.
-+
-+### Completion criterion — a tight loop that goes red
-+
-+Phase 1 is done when the loop is **tight** and **red-capable**: you can name **one command** — a script path, a test invocation, a curl — that you have **already run at least once** (show the invocation and its output, redacted), and that is:
-+
-+- [ ] **Red-capable** — it drives the actual bug code path and asserts the **user's exact symptom**, so it can go red on this bug and green once fixed. Not "runs without erroring" — it must be able to _catch this specific bug_.
-+- [ ] **Deterministic** — same verdict every run (flaky bugs: a pinned, high reproduction rate, per above).
-+- [ ] **Fast** — seconds, not minutes.
-+- [ ] **Agent-runnable** — you can run it unattended; a human in the loop only via `scripts/hitl-loop.template.sh`.
-+
-+If you catch yourself reading code to build a theory before this command exists, **stop — jumping straight to a hypothesis is the exact failure this skill prevents.** No red-capable command, no Phase 2.
-+
-+## Phase 2 — Reproduce + minimise
-+
-+Run the loop. Watch it go red — the bug appears.
-+
-+Confirm:
-+
-+- [ ] The loop produces the failure mode the **user** described — not a different failure that happens to be nearby. Wrong bug = wrong fix.
-+- [ ] The failure is reproducible across multiple runs (or, for non-deterministic bugs, reproducible at a high enough rate to debug against).
-+- [ ] You have captured the exact symptom (error message, wrong output, slow timing) so later phases can verify the fix actually addresses it.
-+
-+### Minimise
-+
-+Once it's red, shrink the repro to the **smallest scenario that still goes red**. Cut inputs, callers, config, data, and steps **one at a time**, re-running the loop after each cut — keep only what's load-bearing for the failure.
-+
-+Why bother: a minimal repro shrinks the hypothesis space in Phase 3 (fewer moving parts left to suspect) and becomes the clean regression test in Phase 5.
-+
-+Done when **every remaining element is load-bearing** — removing any one of them makes the loop go green.
-+
-+Do not proceed until you have reproduced **and** minimised.
-+
-+## Phase 3 — Hypothesise
-+
-+Generate **3–5 ranked hypotheses** before testing any of them. Single-hypothesis generation anchors on the first plausible idea.
-+
-+Each hypothesis must be **falsifiable**: state the prediction it makes.
-+
-+> Format: "If <X> is the cause, then <changing Y> will make the bug disappear / <changing Z> will make it worse."
-+
-+If you cannot state the prediction, the hypothesis is a vibe — discard or sharpen it.
-+
-+**Show the ranked list to the user before testing.** They often have domain knowledge that re-ranks instantly ("we just deployed a change to #3"), or know hypotheses they've already ruled out. Cheap checkpoint, big time saver. Don't block on it — proceed with your ranking if the user is AFK.
-+
-+## Phase 4 — Instrument
-+
-+Each probe must map to a specific prediction from Phase 3. **Change one variable at a time.**
-+
-+Tool preference:
-+
-+1. **Debugger / REPL inspection** if the env supports it. One breakpoint beats ten logs.
-+2. **Targeted logs** at the boundaries that distinguish hypotheses.
-+3. Never "log everything and grep".
-+
-+**Tag every debug log** with a unique prefix, e.g. `[DEBUG-a4f2]`. Cleanup at the end becomes a single grep. Untagged logs survive; tagged logs die.
-+
-+**Perf branch.** For performance regressions, logs are usually wrong. Instead: establish a baseline measurement (timing harness, `performance.now()`, profiler, query plan), then bisect. Measure first, fix second.
-+
-+## Phase 5 — Fix + regression test
-+
-+Write the regression test **before the fix** — but only if there is a **correct seam** for it.
-+
-+A correct seam is one where the test exercises the **real bug pattern** as it occurs at the call site. If the only available seam is too shallow (single-caller test when the bug needs multiple callers, unit test that can't replicate the chain that triggered the bug), a regression test there gives false confidence.
-+
-+**If no correct seam exists, that itself is the finding.** Note it. The codebase architecture is preventing the bug from being locked down. Flag this for the next phase.
-+
-+If a correct seam exists:
-+
-+1. Turn the minimised repro into a failing test at that seam.
-+2. Watch it fail.
-+3. Apply the fix.
-+4. Watch it pass.
-+5. Re-run the Phase 1 feedback loop against the original (un-minimised) scenario.
-+
-+## Phase 6 — Cleanup + post-mortem
-+
-+Required before declaring done:
-+
-+- [ ] Original repro no longer reproduces (re-run the Phase 1 loop)
-+- [ ] Regression test passes (or absence of seam is documented)
-+- [ ] All `[DEBUG-...]` instrumentation removed (`grep` the prefix)
-+- [ ] Throwaway prototypes deleted (or moved to a clearly-marked debug location)
-+- [ ] The hypothesis that turned out correct is stated in the commit / PR message — so the next debugger learns
-+
-+**Then ask: what would have prevented this bug?** If the answer involves architectural change (no good test seam, tangled callers, hidden coupling) hand off to the `/improve-codebase-architecture` skill with the specifics. Make the recommendation **after** the fix is in, not before — you have more information now than when you started.
-diff --git a/.agents/skills/diagnosing-bugs/agents/openai.yaml b/.agents/skills/diagnosing-bugs/agents/openai.yaml
-new file mode 100644
-index 0000000..a13a755
---- /dev/null
-+++ b/.agents/skills/diagnosing-bugs/agents/openai.yaml
-@@ -0,0 +1,3 @@
-+interface:
-+  display_name: "Diagnosing Bugs"
-+  short_description: "Diagnose hard bugs and regressions"
-diff --git a/.agents/skills/diagnosing-bugs/scripts/hitl-loop.template.sh b/.agents/skills/diagnosing-bugs/scripts/hitl-loop.template.sh
-new file mode 100644
-index 0000000..43daedd
---- /dev/null
-+++ b/.agents/skills/diagnosing-bugs/scripts/hitl-loop.template.sh
-@@ -0,0 +1,44 @@
-+#!/usr/bin/env bash
-+# Human-in-the-loop reproduction loop.
-+# Copy this file, edit the steps below, and run it.
-+# The agent runs the script; the user follows prompts in their terminal.
-+#
-+# Usage:
-+#   bash hitl-loop.template.sh
-+#
-+# Two helpers:
-+#   step "<instruction>"          → show instruction, wait for Enter
-+#   capture VAR "<question>"      → show question, read response into VAR
-+#
-+# At the end, captured values are printed as KEY=VALUE for the agent to parse.
-+#
-+# `capture` prints its value back to the terminal, where the agent reads it — so
-+# capture observations, and leave signing in to the user as a `step`.
-+
-+set -euo pipefail
-+
-+step() {
-+  printf '\n>>> %s\n' "$1"
-+  read -r -p "    [Enter when done] " _
-+}
-+
-+capture() {
-+  local var="$1" question="$2" answer
-+  printf '\n>>> %s\n' "$question"
-+  read -r -p "    > " answer
-+  printf -v "$var" '%s' "$answer"
-+}
-+
-+# --- edit below ---------------------------------------------------------
-+
-+step "Open the app at http://localhost:3000 and sign in."
-+
-+capture ERRORED "Click the 'Export' button. Did it throw an error? (y/n)"
-+
-+capture ERROR_MSG "Paste the error message (or 'none'):"
-+
-+# --- edit above ---------------------------------------------------------
-+
-+printf '\n--- Captured ---\n'
-+printf 'ERRORED=%s\n' "$ERRORED"
-+printf 'ERROR_MSG=%s\n' "$ERROR_MSG"
-diff --git a/.agents/skills/domain-modeling/ADR-FORMAT.md b/.agents/skills/domain-modeling/ADR-FORMAT.md
-new file mode 100644
-index 0000000..da7e78e
---- /dev/null
-+++ b/.agents/skills/domain-modeling/ADR-FORMAT.md
-@@ -0,0 +1,47 @@
-+# ADR Format
-+
-+ADRs live in `docs/adr/` and use sequential numbering: `0001-slug.md`, `0002-slug.md`, etc.
-+
-+Create the `docs/adr/` directory lazily — only when the first ADR is needed.
-+
-+## Template
-+
-+```md
-+# {Short title of the decision}
-+
-+{1-3 sentences: what's the context, what did we decide, and why.}
-+```
-+
-+That's it. An ADR can be a single paragraph. The value is in recording *that* a decision was made and *why* — not in filling out sections.
-+
-+## Optional sections
-+
-+Only include these when they add genuine value. Most ADRs won't need them.
-+
-+- **Status** frontmatter (`proposed | accepted | deprecated | superseded by ADR-NNNN`) — useful when decisions are revisited
-+- **Considered Options** — only when the rejected alternatives are worth remembering
-+- **Consequences** — only when non-obvious downstream effects need to be called out
-+
-+## Numbering
-+
-+Scan `docs/adr/` for the highest existing number and increment by one.
-+
-+## When to offer an ADR
-+
-+All three of these must be true:
-+
-+1. **Hard to reverse** — the cost of changing your mind later is meaningful
-+2. **Surprising without context** — a future reader will look at the code and wonder "why on earth did they do it this way?"
-+3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons
-+
-+If a decision is easy to reverse, skip it — you'll just reverse it. If it's not surprising, nobody will wonder why. If there was no real alternative, there's nothing to record beyond "we did the obvious thing."
-+
-+### What qualifies
-+
-+- **Architectural shape.** "We're using a monorepo." "The write model is event-sourced, the read model is projected into Postgres."
-+- **Integration patterns between contexts.** "Ordering and Billing communicate via domain events, not synchronous HTTP."
-+- **Technology choices that carry lock-in.** Database, message bus, auth provider, deployment target. Not every library — just the ones that would take a quarter to swap out.
-+- **Boundary and scope decisions.** "Customer data is owned by the Customer context; other contexts reference it by ID only." The explicit no-s are as valuable as the yes-s.
-+- **Deliberate deviations from the obvious path.** "We're using manual SQL instead of an ORM because X." Anything where a reasonable reader would assume the opposite. These stop the next engineer from "fixing" something that was deliberate.
-+- **Constraints not visible in the code.** "We can't use AWS because of compliance requirements." "Response times must be under 200ms because of the partner API contract."
-+- **Rejected alternatives when the rejection is non-obvious.** If you considered GraphQL and picked REST for subtle reasons, record it — otherwise someone will suggest GraphQL again in six months.
-diff --git a/.agents/skills/domain-modeling/CONTEXT-FORMAT.md b/.agents/skills/domain-modeling/CONTEXT-FORMAT.md
-new file mode 100644
-index 0000000..eaf2a18
---- /dev/null
-+++ b/.agents/skills/domain-modeling/CONTEXT-FORMAT.md
-@@ -0,0 +1,60 @@
-+# CONTEXT.md Format
-+
-+## Structure
-+
-+```md
-+# {Context Name}
-+
-+{One or two sentence description of what this context is and why it exists.}
-+
-+## Language
-+
-+**Order**:
-+{A one or two sentence description of the term}
-+_Avoid_: Purchase, transaction
-+
-+**Invoice**:
-+A request for payment sent to a customer after delivery.
-+_Avoid_: Bill, payment request
-+
-+**Customer**:
-+A person or organization that places orders.
-+_Avoid_: Client, buyer, account
-+```
-+
-+## Rules
-+
-+- **Be opinionated.** When multiple words exist for the same concept, pick the best one and list the others under `_Avoid_`.
-+- **Keep definitions tight.** One or two sentences max. Define what it IS, not what it does.
-+- **Only include terms specific to this project's context.** General programming concepts (timeouts, error types, utility patterns) don't belong even if the project uses them extensively. Before adding a term, ask: is this a concept unique to this context, or a general programming concept? Only the former belongs.
-+- **Group terms under subheadings** when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
-+
-+## Single vs multi-context repos
-+
-+**Single context (most repos):** One `CONTEXT.md` at the repo root.
-+
-+**Multiple contexts:** A `CONTEXT-MAP.md` at the repo root lists the contexts, where they live, and how they relate to each other:
-+
-+```md
-+# Context Map
-+
-+## Contexts
-+
-+- [Ordering](./src/ordering/CONTEXT.md) — receives and tracks customer orders
-+- [Billing](./src/billing/CONTEXT.md) — generates invoices and processes payments
-+- [Fulfillment](./src/fulfillment/CONTEXT.md) — manages warehouse picking and shipping
-+
-+## Relationships
-+
-+- **Ordering → Fulfillment**: Ordering emits `OrderPlaced` events; Fulfillment consumes them to start picking
-+- **Fulfillment → Billing**: Fulfillment emits `ShipmentDispatched` events; Billing consumes them to generate invoices
-+- **Ordering ↔ Billing**: Shared types for `CustomerId` and `Money`
-+```
-+
-+The skill infers which structure applies:
-+
-+- If `CONTEXT-MAP.md` exists, read it to find contexts
-+- If only a root `CONTEXT.md` exists, single context
-+- If neither exists, create a root `CONTEXT.md` lazily when the first term is resolved
-+
-+When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.
-diff --git a/.agents/skills/domain-modeling/SKILL.md b/.agents/skills/domain-modeling/SKILL.md
-new file mode 100644
-index 0000000..d0f7e1a
---- /dev/null
-+++ b/.agents/skills/domain-modeling/SKILL.md
-@@ -0,0 +1,74 @@
-+---
-+name: domain-modeling
-+description: Build and sharpen a project's domain model. Use when the user wants to pin down domain terminology or a ubiquitous language, record an architectural decision, or when another skill needs to maintain the domain model.
-+---
-+
-+# Domain Modeling
-+
-+Actively build and sharpen the project's domain model as you design. This is the *active* discipline — challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `CONTEXT.md` for vocabulary is not this skill — that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
-+
-+## File structure
-+
-+Most repos have a single context:
-+
-+```
-+/
-+├── CONTEXT.md
-+├── docs/
-+│   └── adr/
-+│       ├── 0001-event-sourced-orders.md
-+│       └── 0002-postgres-for-write-model.md
-+└── src/
-+```
-+
-+If a `CONTEXT-MAP.md` exists at the root, the repo has multiple contexts. The map points to where each one lives:
-+
-+```
-+/
-+├── CONTEXT-MAP.md
-+├── docs/
-+│   └── adr/                          ← system-wide decisions
-+├── src/
-+│   ├── ordering/
-+│   │   ├── CONTEXT.md
-+│   │   └── docs/adr/                 ← context-specific decisions
-+│   └── billing/
-+│       ├── CONTEXT.md
-+│       └── docs/adr/
-+```
-+
-+Create files lazily — only when you have something to write. If no `CONTEXT.md` exists, create one when the first term is resolved. If no `docs/adr/` exists, create it when the first ADR is needed.
-+
-+## During the session
-+
-+### Challenge against the glossary
-+
-+When the user uses a term that conflicts with the existing language in `CONTEXT.md`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y — which is it?"
-+
-+### Sharpen fuzzy language
-+
-+When the user uses vague or overloaded terms, propose a precise canonical term. "You're saying 'account' — do you mean the Customer or the User? Those are different things."
-+
-+### Discuss concrete scenarios
-+
-+When domain relationships are being discussed, stress-test them with specific scenarios. Invent scenarios that probe edge cases and force the user to be precise about the boundaries between concepts.
-+
-+### Cross-reference with code
-+
-+When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
-+
-+### Update CONTEXT.md inline
-+
-+When a term is resolved, update `CONTEXT.md` right there. Don't batch these up — capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
-+
-+`CONTEXT.md` should be totally devoid of implementation details. Do not treat `CONTEXT.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
-+
-+### Offer ADRs sparingly
-+
-+Only offer to create an ADR when all three are true:
-+
-+1. **Hard to reverse** — the cost of changing your mind later is meaningful
-+2. **Surprising without context** — a future reader will wonder "why did they do it this way?"
-+3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons
-+
-+If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](./ADR-FORMAT.md).
-diff --git a/.agents/skills/domain-modeling/agents/openai.yaml b/.agents/skills/domain-modeling/agents/openai.yaml
-new file mode 100644
-index 0000000..7f1522d
---- /dev/null
-+++ b/.agents/skills/domain-modeling/agents/openai.yaml
-@@ -0,0 +1,3 @@
-+interface:
-+  display_name: "Domain Modeling"
-+  short_description: "Build and sharpen a domain model"
-diff --git a/.agents/skills/research/SKILL.md b/.agents/skills/research/SKILL.md
-new file mode 100644
-index 0000000..0ba594a
---- /dev/null
-+++ b/.agents/skills/research/SKILL.md
-@@ -0,0 +1,12 @@
-+---
-+name: research
-+description: Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a background agent.
-+---
-+
-+Spin up a **background agent** to do the research, so you keep working while it reads.
-+
-+Its job:
-+
-+1. Investigate the question against **primary sources** — official docs, source code, specs, first-party APIs — not a secondary write-up of them. Follow every claim back to the source that owns it.
-+2. Write the findings to a single Markdown file, citing each claim's source.
-+3. Save it where the repo already keeps such notes; match the existing convention, and if there is none, put it somewhere sensible and say where.
-diff --git a/.agents/skills/research/agents/openai.yaml b/.agents/skills/research/agents/openai.yaml
-new file mode 100644
-index 0000000..e18b96c
---- /dev/null
-+++ b/.agents/skills/research/agents/openai.yaml
-@@ -0,0 +1,3 @@
-+interface:
-+  display_name: "Research"
-+  short_description: "Research from high-trust sources"
-diff --git a/.agents/skills/tdd/SKILL.md b/.agents/skills/tdd/SKILL.md
-new file mode 100644
-index 0000000..d4ad671
---- /dev/null
-+++ b/.agents/skills/tdd/SKILL.md
-@@ -0,0 +1,39 @@
-+---
-+name: tdd
-+description: Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions "red-green-refactor", or wants integration tests.
-+---
-+
-+# Test-Driven Development
-+
-+TDD is the red → green loop. This skill is the reference that makes that loop produce tests worth keeping: what a good test is, where tests go, the anti-patterns, and the rules of the loop. Every section applies on every cycle — consult them before and during the loop, not after.
-+
-+When exploring the codebase, read `CONTEXT.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
-+
-+## What a good test is
-+
-+Tests verify behavior through public interfaces, not implementation details. Code can change entirely; tests shouldn't. A good test reads like a specification — "user can checkout with valid cart" tells you exactly what capability exists — and survives refactors because it doesn't care about internal structure.
-+
-+See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
-+
-+## Seams — where tests go
-+
-+A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals.
-+
-+**Derive seams from the authorized task.** Approval of an implementation task or plan includes the tests necessary to implement and verify it, including new public test interfaces within that scope. Identify the seams and proceed without a separate test-approval round. Existing seam approvals remain valid across turns and implementation stages.
-+
-+Ask only when choosing a seam or its expected behavior requires an unresolved business or research decision, expands the authorized scope, or changes the experimental protocol. Routine test design is an implementation decision. Test approval does not authorize additional external actions, costly runs, or crossing an explicit user checkpoint.
-+
-+When the shape of that interface is itself in question — how deep the module is, where the seam belongs, what the interface should expose — use the `/codebase-design` skill for the vocabulary. It is the shared source of the module, interface, depth, seam, adapter, leverage and locality terms, and it is a reference to consult, not a session to run.
-+
-+## Anti-patterns
-+
-+- **Implementation-coupled** — mocks internal collaborators, tests private methods, or verifies through a side channel (querying the database instead of using the interface). The tell: the test breaks when you refactor but behavior hasn't changed.
-+- **Tautological** — the assertion recomputes the expected value the way the code does (`expect(add(a, b)).toBe(a + b)`, a snapshot derived by hand the same way, a constant asserted equal to itself), so it passes by construction and can never disagree with the code. Expected values must come from an independent source of truth — a known-good literal, a worked example, the spec.
-+- **Horizontal slicing** — writing all tests first, then all implementation. Bulk tests verify _imagined_ behavior: you test the _shape_ of things rather than user-facing behavior, the tests go insensitive to real changes, and you commit to test structure before understanding the implementation. Work in **vertical slices** instead — one test → one implementation → repeat, each test a **tracer bullet** that responds to what the last cycle taught you.
-+
-+## Rules of the loop
-+
-+- **Continuous execution.** Within the authorized task and seams identified above, proceed from a passing test to the next slice and onward through integration and verification until the task is complete. Report intermediate progress without ending the turn or requesting another `continue`; pause only for a genuine blocker, a decision requiring user input, an authorization boundary, or an explicit user-requested checkpoint.
-+- **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
-+- **One slice at a time.** One seam, one test, one minimal implementation per cycle.
-+- **Refactoring is not part of the loop.** It belongs to the review stage (see the `code-review` skill), not the red → green implementation cycle.
-diff --git a/.agents/skills/tdd/agents/openai.yaml b/.agents/skills/tdd/agents/openai.yaml
-new file mode 100644
-index 0000000..651b838
---- /dev/null
-+++ b/.agents/skills/tdd/agents/openai.yaml
-@@ -0,0 +1,3 @@
-+interface:
-+  display_name: "TDD"
-+  short_description: "Test-driven red-green-refactor"
-diff --git a/.agents/skills/tdd/mocking.md b/.agents/skills/tdd/mocking.md
-new file mode 100644
-index 0000000..71cbfee
---- /dev/null
-+++ b/.agents/skills/tdd/mocking.md
-@@ -0,0 +1,59 @@
-+# When to Mock
-+
-+Mock at **system boundaries** only:
-+
-+- External APIs (payment, email, etc.)
-+- Databases (sometimes - prefer test DB)
-+- Time/randomness
-+- File system (sometimes)
-+
-+Don't mock:
-+
-+- Your own classes/modules
-+- Internal collaborators
-+- Anything you control
-+
-+## Designing for Mockability
-+
-+At system boundaries, design interfaces that are easy to mock:
-+
-+**1. Use dependency injection**
-+
-+Pass external dependencies in rather than creating them internally:
-+
-+```typescript
-+// Easy to mock
-+function processPayment(order, paymentClient) {
-+  return paymentClient.charge(order.total);
-+}
-+
-+// Hard to mock
-+function processPayment(order) {
-+  const client = new StripeClient(process.env.STRIPE_KEY);
-+  return client.charge(order.total);
-+}
-+```
-+
-+**2. Prefer SDK-style interfaces over generic fetchers**
-+
-+Create specific functions for each external operation instead of one generic function with conditional logic:
-+
-+```typescript
-+// GOOD: Each function is independently mockable
-+const api = {
-+  getUser: (id) => fetch(`/users/${id}`),
-+  getOrders: (userId) => fetch(`/users/${userId}/orders`),
-+  createOrder: (data) => fetch('/orders', { method: 'POST', body: data }),
-+};
-+
-+// BAD: Mocking requires conditional logic inside the mock
-+const api = {
-+  fetch: (endpoint, options) => fetch(endpoint, options),
-+};
-+```
-+
-+The SDK approach means:
-+- Each mock returns one specific shape
-+- No conditional logic in test setup
-+- Easier to see which endpoints a test exercises
-+- Type safety per endpoint
-diff --git a/.agents/skills/tdd/tests.md b/.agents/skills/tdd/tests.md
-new file mode 100644
-index 0000000..7ab8647
---- /dev/null
-+++ b/.agents/skills/tdd/tests.md
-@@ -0,0 +1,77 @@
-+# Good and Bad Tests
-+
-+## Good Tests
-+
-+**Integration-style**: Test through real interfaces, not mocks of internal parts.
-+
-+```typescript
-+// GOOD: Tests observable behavior
-+test("user can checkout with valid cart", async () => {
-+  const cart = createCart();
-+  cart.add(product);
-+  const result = await checkout(cart, paymentMethod);
-+  expect(result.status).toBe("confirmed");
-+});
-+```
-+
-+Characteristics:
-+
-+- Tests behavior users/callers care about
-+- Uses public API only
-+- Survives internal refactors
-+- Describes WHAT, not HOW
-+- One logical assertion per test
-+
-+## Bad Tests
-+
-+**Implementation-detail tests**: Coupled to internal structure.
-+
-+```typescript
-+// BAD: Tests implementation details
-+test("checkout calls paymentService.process", async () => {
-+  const mockPayment = jest.mock(paymentService);
-+  await checkout(cart, payment);
-+  expect(mockPayment.process).toHaveBeenCalledWith(cart.total);
-+});
-+```
-+
-+Red flags:
-+
-+- Mocking internal collaborators
-+- Testing private methods
-+- Asserting on call counts/order
-+- Test breaks when refactoring without behavior change
-+- Test name describes HOW not WHAT
-+- Verifying through external means instead of interface
-+
-+```typescript
-+// BAD: Bypasses interface to verify
-+test("createUser saves to database", async () => {
-+  await createUser({ name: "Alice" });
-+  const row = await db.query("SELECT * FROM users WHERE name = ?", ["Alice"]);
-+  expect(row).toBeDefined();
-+});
-+
-+// GOOD: Verifies through interface
-+test("createUser makes user retrievable", async () => {
-+  const user = await createUser({ name: "Alice" });
-+  const retrieved = await getUser(user.id);
-+  expect(retrieved.name).toBe("Alice");
-+});
-+```
-+
-+**Tautological tests**: Expected value restates the implementation, so the test passes by construction.
-+
-+```typescript
-+// BAD: Expected value is recomputed the way the code computes it
-+test("calculateTotal sums line items", () => {
-+  const items = [{ price: 10 }, { price: 5 }];
-+  const expected = items.reduce((sum, i) => sum + i.price, 0);
-+  expect(calculateTotal(items)).toBe(expected);
-+});
-+
-+// GOOD: Expected value is an independent, known literal
-+test("calculateTotal sums line items", () => {
-+  expect(calculateTotal([{ price: 10 }, { price: 5 }])).toBe(15);
-+});
-+```
-diff --git a/.ai-bridge/README.md b/.ai-bridge/README.md
-new file mode 100644
-index 0000000..6d4aa53
---- /dev/null
-+++ b/.ai-bridge/README.md
-@@ -0,0 +1,13 @@
-+# AI Bridge
-+
-+Shared planning context for ChatGPT, other planning models, Codex, OpenCode, Pi, or another local implementation agent.
-+
-+- current-plan.md: plan produced by ChatGPT or another planning model for the implementation agent.
-+- agent-status.md: generic implementation notes, touched files, test results, blockers, and review notes.
-+- implementation-diff.patch: final review diff from the implementation agent when practical.
-+- codex-status.md: legacy Codex-specific status file, kept for existing workflows.
-+- decisions.md: architectural decisions that should remain stable.
-+- open-questions.md: unresolved questions.
-+- execution-log.jsonl: append-only generic agent handoff and execution events.
-+- handoff-run-state.json: machine-readable run lifecycle (running/completed/failed/timed_out) written by execute-handoff/watch-handoff/loop-handoff and polled by the read-only wait_for_handoff tool.
-+- session-log.jsonl: append-only legacy session events.
-diff --git a/.ai-bridge/agent-status.md b/.ai-bridge/agent-status.md
-new file mode 100644
-index 0000000..287312a
---- /dev/null
-+++ b/.ai-bridge/agent-status.md
-@@ -0,0 +1,3 @@
-+# Agent Status
-+
-+No implementation agent status written yet.
-diff --git a/.ai-bridge/codex-status.md b/.ai-bridge/codex-status.md
-new file mode 100644
-index 0000000..8dd477b
---- /dev/null
-+++ b/.ai-bridge/codex-status.md
-@@ -0,0 +1,3 @@
-+# Codex Status
-+
-+No Codex status written yet.
-diff --git a/.ai-bridge/current-plan.md b/.ai-bridge/current-plan.md
-new file mode 100644
-index 0000000..bc45dd9
---- /dev/null
-+++ b/.ai-bridge/current-plan.md
-@@ -0,0 +1,119 @@
-+# Sync SynSLP and deploy AnyText2
-+
-+Updated: 2026-09-22T03:56:46.552Z
-+Workspace: /home/kyrie/cxprojects/SynSLP
-+Target agent: Codex (codex)
-+
-+## Plan
-+
-+# Goal
-+
-+Establish SynSLP as one consistent Git repository across local, GitHub, and server, then deploy and minimally validate the official AnyText2 on server. Execute strictly in this order. Do not start a later stage until the previous stage is verified.
-+
-+## 1. Establish local ↔ GitHub Git baseline
-+
-+Local root:
-+- /home/kyrie/cxprojects/SynSLP
-+
-+GitHub:
-+- kyrie21z/SynSLP
-+
-+Current known fact:
-+- The local root exists but is not currently a Git repository.
-+- Do not assume the remote is empty or assume any previously reported commit hash is still current; inspect GitHub/remote state first.
-+
-+Actions:
-+- Inspect local files, including hidden files, before any Git initialization or clone.
-+- If local contains user files, preserve them; do not delete, overwrite, hard-reset, or force-push.
-+- Inspect the GitHub repository and default branch.
-+- Establish origin and main so local and GitHub contain the union of intended project files without losing either side.
-+- Prefer normal Git history; if remote already has history, integrate safely instead of recreating it.
-+- End with a clean working tree and local HEAD == origin/main.
-+
-+Verification:
-+- local is a Git repository on branch main
-+- origin points to kyrie21z/SynSLP
-+- working tree clean
-+- local HEAD == origin/main
-+
-+## 2. Sync GitHub → server
-+
-+Target:
-+- server-zyx:/mnt/data/zyx/SynSLP
-+
-+Actions:
-+- Connect to server-zyx.
-+- If target does not exist, clone from GitHub.
-+- If target exists, inspect status first and preserve any uncommitted or unique server-side work.
-+- Safely align server main with GitHub main.
-+- Do not use destructive reset/force operations.
-+- Do not use whole-repository scp/rsync as a substitute for Git synchronization.
-+
-+Verification:
-+- local HEAD == origin/main == server HEAD
-+- server working tree clean
-+
-+## 3. Deploy official AnyText2 on server only
-+
-+Start only after stages 1 and 2 pass.
-+
-+Upstream:
-+- https://github.com/tyxsspa/AnyText2
-+
-+Purpose:
-+- off-the-shelf synthetic SLP data generator only
-+- no model architecture changes
-+- no training or fine-tuning
-+
-+Deployment constraints:
-+- Use an isolated environment; prefer conda env name: anytext2.
-+- Before installing, inspect server GPU, driver/CUDA, free disk space, conda, and Python state.
-+- Reproduce the official AnyText2 environment as closely as practical; if exact official versions conflict with the server, make the minimum compatibility change and record it.
-+- Keep third-party source, checkpoints, caches, and generated data out of Git unless a small explicit config/launcher is intentionally part of SynSLP.
-+- Prefer FP16 inference where supported.
-+- Disable optional prompt-translation components if they materially increase VRAM and are not needed for Chinese target-text editing.
-+- Use the official/public checkpoint referenced by the AnyText2 project; record exact source and revision when possible.
-+
-+## 4. Minimal deployment acceptance test
-+
-+Prove functionality, not just installation.
-+
-+Required checks:
-+1. AnyText2 checkpoint loads successfully.
-+2. CUDA inference runs successfully.
-+3. A stock/example inference produces an output image.
-+4. One Chinese ship-license-plate-oriented reference edit smoke test succeeds:
-+   - reference image
-+   - explicit text region/mask as required by AnyText2
-+   - Chinese + digits target string
-+   - saved edited output
-+
-+Record in repo-visible notes or deployment metadata:
-+- GPU model / VRAM
-+- Python, PyTorch, CUDA versions
-+- AnyText2 upstream commit/revision
-+- checkpoint source/revision
-+- exact smoke-test command/config
-+- input/output paths
-+- encountered errors and the minimal fixes applied
-+
-+## Stop condition
-+
-+Stop immediately after the smoke test is reproducibly successful.
-+
-+Out of scope:
-+- batch synthesis pipeline
-+- OCR exact-match filtering
-+- dataset sampling policy
-+- Qwen-Image-Edit
-+- AnyText2 training/fine-tuning
-+- model comparison or downstream SLPR training
-+
-+## Implementation contract
-+
-+- Work from this plan in small, reviewable steps.
-+- Keep edits scoped to the requested task and existing project conventions.
-+- Run focused verification before handing work back.
-+- Update .ai-bridge/agent-status.md with files touched, checks run, results, blockers, and review notes.
-+- Save the final review diff to .ai-bridge/implementation-diff.patch when practical.
-+- Append notable execution events to .ai-bridge/execution-log.jsonl when the implementation agent supports logging.
-diff --git a/.ai-bridge/decisions.md b/.ai-bridge/decisions.md
-new file mode 100644
-index 0000000..3ae0096
---- /dev/null
-+++ b/.ai-bridge/decisions.md
-@@ -0,0 +1,2 @@
-+# Decisions
-+
-diff --git a/.ai-bridge/execution-log.jsonl b/.ai-bridge/execution-log.jsonl
-new file mode 100644
-index 0000000..95fb2fe
---- /dev/null
-+++ b/.ai-bridge/execution-log.jsonl
-@@ -0,0 +1 @@
-+{"ts":"2026-09-22T03:56:46.559Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Sync SynSLP and deploy AnyText2","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
-diff --git a/.ai-bridge/implementation-diff.patch b/.ai-bridge/implementation-diff.patch
-new file mode 100644
-index 0000000..e69de29
-diff --git a/.ai-bridge/open-questions.md b/.ai-bridge/open-questions.md
-new file mode 100644
-index 0000000..6e3bf09
---- /dev/null
-+++ b/.ai-bridge/open-questions.md
-@@ -0,0 +1,2 @@
-+# Open Questions
-+
-diff --git a/.ai-bridge/session-log.jsonl b/.ai-bridge/session-log.jsonl
-new file mode 100644
-index 0000000..95fb2fe
---- /dev/null
-+++ b/.ai-bridge/session-log.jsonl
-@@ -0,0 +1 @@
-+{"ts":"2026-09-22T03:56:46.559Z","event":"handoff_to_agent","agent":"codex","agent_name":"Codex","title":"Sync SynSLP and deploy AnyText2","plan_path":".ai-bridge/current-plan.md","status_path":".ai-bridge/agent-status.md","diff_path":".ai-bridge/implementation-diff.patch"}
-diff --git a/scripts/smoke_test_anytext2.py b/scripts/smoke_test_anytext2.py
-new file mode 100644
-index 0000000..7052dba
---- /dev/null
-+++ b/scripts/smoke_test_anytext2.py
-@@ -0,0 +1,227 @@
-+#!/usr/bin/env python3
-+"""
-+SynSLP AnyText2 Minimal Deployment Acceptance Test (Stage 4)
-+
-+Verifies:
-+1. AnyText2 checkpoint loads successfully.
-+2. CUDA inference runs successfully.
-+3. A stock/example inference produces an output image.
-+4. One Chinese ship-license-plate-oriented reference edit smoke test succeeds.
-+"""
-+
-+import os
-+import sys
-+import time
-+import argparse
-+from pathlib import Path
-+import numpy as np
-+import cv2
-+import torch
-+
-+def parse_args():
-+    parser = argparse.ArgumentParser(description="AnyText2 Stage 4 Acceptance Smoke Test")
-+    parser.add_argument("--device", type=str, default="cuda:0")
-+    parser.add_argument("--ddim_steps", type=int, default=20)
-+    parser.add_argument("--output_dir", type=str, default=None)
-+    parser.add_argument("--slp_ref_image", type=str, default=None)
-+    return parser.parse_args()
-+
-+def main():
-+    args = parse_args()
-+
-+    root_dir = Path(__file__).resolve().parent.parent
-+    anytext2_dir = root_dir / "third_party" / "AnyText2"
-+    if not anytext2_dir.exists():
-+        raise FileNotFoundError(f"AnyText2 directory not found: {anytext2_dir}")
-+
-+    output_dir = Path(args.output_dir) if args.output_dir else root_dir / "outputs" / "smoke_test"
-+    output_dir.mkdir(parents=True, exist_ok=True)
-+
-+    sys.path.insert(0, str(anytext2_dir))
-+    os.chdir(str(anytext2_dir))
-+
-+    print("=" * 60)
-+    print("SynSLP AnyText2 Deployment Acceptance Test")
-+    print("=" * 60)
-+
-+    # 1. Environment and Hardware Inspection
-+    print("[1/5] Inspecting environment and GPU...")
-+    print(f"Python: {sys.version.split()[0]}")
-+    print(f"PyTorch: {torch.__version__}")
-+    print(f"CUDA available: {torch.cuda.is_available()}")
-+    if not torch.cuda.is_available():
-+        raise SystemExit("ERROR: CUDA is not available.")
-+
-+    gpu_name = torch.cuda.get_device_name(0)
-+    vram_total = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-+    vram_free = torch.cuda.mem_get_info()[0] / (1024 ** 3)
-+    print(f"GPU: {gpu_name}")
-+    print(f"Total VRAM: {vram_total:.2f} GB | Free VRAM: {vram_free:.2f} GB")
-+
-+    # 2. Check 1 & 2: Load Model and Checkpoint
-+    print("\n[2/5] Check 1 & 2: Loading AnyText2 checkpoint on GPU...")
-+    from ms_wrapper import AnyText2Model
-+    from util import check_channels, resize_image
-+
-+    ckpt_path = anytext2_dir / "models" / "anytext_v2.0.ckpt"
-+    if not ckpt_path.exists():
-+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-+
-+    start_time = time.time()
-+    model = AnyText2Model(
-+        model_dir=str(anytext2_dir / "models"),
-+        use_fp16=True,
-+        use_translator=False,
-+        font_path="font/Arial_Unicode.ttf",
-+        model_path=str(ckpt_path),
-+    ).cuda(0)
-+    load_time = time.time() - start_time
-+    print(f"PASS: AnyText2Model loaded in {load_time:.2f}s (FP16, translator disabled).")
-+
-+    # Common inference parameters
-+    a_prompt = "best quality, extremely detailed, 4k, HD, legible text, clear text, high-resolution"
-+    n_prompt = "low quality, blurry, deformed text"
-+
-+    # 3. Check 3: Stock Example Inference
-+    print("\n[3/5] Check 3: Running stock example inference...")
-+    stock_ref = anytext2_dir / "example_images" / "ref2.jpg"
-+    stock_edit = anytext2_dir / "example_images" / "edit2.png"
-+    if not stock_ref.exists() or not stock_edit.exists():
-+        raise FileNotFoundError(f"Missing stock example files in {anytext2_dir / 'example_images'}")
-+
-+    ori_stock_img = cv2.imread(str(stock_ref))[..., ::-1]
-+    ref_stock_img = cv2.imread(str(stock_edit))[..., ::-1]
-+
-+    # Mask in AnyText2 demo: 255 - edit_image
-+    pos_stock = (255 - ref_stock_img).clip(0, 255).astype(np.uint8)
-+
-+    stock_params = {
-+        "mode": "edit",
-+        "sort_priority": "↔",
-+        "show_debug": False,
-+        "revise_pos": False,
-+        "image_count": 1,
-+        "ddim_steps": args.ddim_steps,
-+        "image_width": 768,
-+        "image_height": 768,
-+        "strength": 1.0,
-+        "attnx_scale": 1.0,
-+        "font_hollow": False,
-+        "cfg_scale": 9.0,
-+        "eta": 0.0,
-+        "a_prompt": a_prompt,
-+        "n_prompt": n_prompt,
-+        "base_model_path": "",
-+        "lora_path_ratio": "",
-+        "glyline_font_path": ["None"] * 5,
-+        "font_hint_image": [None] * 5,
-+        "font_hint_mask": [None] * 5,
-+        "text_colors": "500,500,500 500,500,500 500,500,500 500,500,500 500,500,500",
-+    }
-+    stock_input = {
-+        "img_prompt": "a cartoon pig expression",
-+        "text_prompt": '"下班"',
-+        "seed": 43304008,
-+        "draw_pos": pos_stock,
-+        "ori_image": ori_stock_img,
-+    }
-+
-+    t0 = time.time()
-+    with torch.no_grad():
-+        stock_results, rtn_code, rtn_warning, _ = model(stock_input, **stock_params)
-+    t_stock = time.time() - t0
-+
-+    if rtn_code < 0:
-+        raise RuntimeError(f"Stock example inference failed: {rtn_warning}")
-+
-+    stock_output_path = output_dir / "stock_example_result.png"
-+    cv2.imwrite(str(stock_output_path), stock_results[0][..., ::-1])
-+    print(f"PASS: Stock example inference generated in {t_stock:.2f}s.")
-+    print(f"Saved to: {stock_output_path}")
-+
-+    # 4. Check 4: Chinese Ship License Plate Reference Edit
-+    print("\n[4/5] Check 4: Chinese ship-license-plate reference edit smoke test...")
-+    slp_img_path = None
-+    candidate_paths = [
-+        args.slp_ref_image,
-+        "/mnt/data/zyx/SLP34K/ocr_training/data/pairs/target_2_High_quality_categorized/7755/O_20190510_13_26_50_516000.jpg&&&&7755&&&&5-浙绍兴货0668.jpg",
-+    ]
-+    for p in candidate_paths:
-+        if p and Path(p).exists():
-+            slp_img_path = Path(p)
-+            break
-+
-+    if slp_img_path is not None:
-+        print(f"Using SLP reference plate from: {slp_img_path}")
-+        plate_bgr = cv2.imread(str(slp_img_path))
-+    else:
-+        print("Creating synthetic blue ship license plate template...")
-+        plate_bgr = np.full((128, 768, 3), (180, 80, 20), dtype=np.uint8)  # blue plate BGR
-+
-+    # Pad/resize plate to valid dimensions for diffusion (multiple of 64)
-+    ph, pw = plate_bgr.shape[:2]
-+    # Resize to standard height 128, width 768
-+    plate_rgb = cv2.resize(plate_bgr, (768, 128))[..., ::-1]
-+
-+    # Create mask: white rectangle covering text area
-+    pos_slp = np.zeros((128, 768, 3), dtype=np.uint8)
-+    pos_slp[20:108, 60:708, :] = 255  # Text region mask
-+
-+    target_chinese_text = "皖宣城货0188"
-+    slp_params = {
-+        "mode": "edit",
-+        "sort_priority": "↔",
-+        "show_debug": False,
-+        "revise_pos": False,
-+        "image_count": 1,
-+        "ddim_steps": args.ddim_steps,
-+        "image_width": 768,
-+        "image_height": 128,
-+        "strength": 1.0,
-+        "attnx_scale": 1.0,
-+        "font_hollow": False,
-+        "cfg_scale": 9.0,
-+        "eta": 0.0,
-+        "a_prompt": "a Chinese ship license plate, blue background, white clean text, realistic photo",
-+        "n_prompt": "low quality, blurry, noisy",
-+        "base_model_path": "",
-+        "lora_path_ratio": "",
-+        "glyline_font_path": ["None"] * 5,
-+        "font_hint_image": [None] * 5,
-+        "font_hint_mask": [None] * 5,
-+        "text_colors": "500,500,500 500,500,500 500,500,500 500,500,500 500,500,500",
-+    }
-+    slp_input = {
-+        "img_prompt": "a Chinese ship license plate",
-+        "text_prompt": f'"{target_chinese_text}"',
-+        "seed": 2026,
-+        "draw_pos": pos_slp,
-+        "ori_image": plate_rgb,
-+    }
-+
-+    t0 = time.time()
-+    with torch.no_grad():
-+        slp_results, rtn_code, rtn_warning, _ = model(slp_input, **slp_params)
-+    t_slp = time.time() - t0
-+
-+    if rtn_code < 0:
-+        raise RuntimeError(f"SLP edit inference failed: {rtn_warning}")
-+
-+    slp_output_path = output_dir / "slp_reference_edit_result.png"
-+    cv2.imwrite(str(slp_output_path), slp_results[0][..., ::-1])
-+    print(f"PASS: Chinese SLP reference edit generated in {t_slp:.2f}s.")
-+    print(f"Target text: {target_chinese_text}")
-+    print(f"Saved to: {slp_output_path}")
-+
-+    # 5. Summary and Acceptance Sign-off
-+    print("\n[5/5] Stage 4 Acceptance Test Summary")
-+    print("-" * 40)
-+    print(f"GPU: {gpu_name} (Total: {vram_total:.2f} GB)")
-+    print(f"Stock output: {stock_output_path} (exists={stock_output_path.exists()})")
-+    print(f"SLP output:   {slp_output_path} (exists={slp_output_path.exists()})")
-+    print(f"Peak VRAM used: {torch.cuda.max_memory_allocated() / (1024**3):.2f} GB")
-+    print("-" * 40)
-+    print("STAGE 4 VERIFIED: ALL CHECKS PASSED (PASS)")
-+
-+if __name__ == "__main__":
-+    main()
-diff --git a/skills-lock.json b/skills-lock.json
-new file mode 100644
-index 0000000..3043381
---- /dev/null
-+++ b/skills-lock.json
-@@ -0,0 +1,155 @@
-+{
-+  "version": 1,
-+  "skills": {
-+    "ask-matt": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/ask-matt/SKILL.md",
-+      "computedHash": "b2e8ef5ffc2f142022c1e1e1bba68073f0821356a8e1cf1b23670f61d13fe50b"
-+    },
-+    "code-review": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/code-review/SKILL.md",
-+      "computedHash": "1d5e7242a98674635be79ab310cdda0e555d36a9903d2526ebf4263d0b7997ca"
-+    },
-+    "codebase-design": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/codebase-design/SKILL.md",
-+      "computedHash": "e6394592ecf4b5aa5bc93f95a20d0a56314788bde2e1221f87296d3becb734a2"
-+    },
-+    "diagnosing-bugs": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/diagnosing-bugs/SKILL.md",
-+      "computedHash": "c86c725ad271ba57d7e9ffd86122b898438314ef9c20ec1dbe03f3e8f149c3b2"
-+    },
-+    "domain-modeling": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/domain-modeling/SKILL.md",
-+      "computedHash": "363cb0f53b0b431e7c00086ad1f823500b7e1b70b5616ee969c979f0934e9e6e"
-+    },
-+    "grill-me": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/productivity/grill-me/SKILL.md",
-+      "computedHash": "f361db4e15e6bfd562a9282b1dccda513910a50061f9e838ce017be9c69dde3f"
-+    },
-+    "grill-with-docs": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/grill-with-docs/SKILL.md",
-+      "computedHash": "9c460cbd94fd3c63cdef967dbdb6e66ca687103cdc380cd37834e4d10b738f78"
-+    },
-+    "grilling": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/productivity/grilling/SKILL.md",
-+      "computedHash": "4ebdd12fe61ff3abf20cff6683740e2b9b3739454be0a3f4a928a1c4d07d6b34"
-+    },
-+    "handoff": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/productivity/handoff/SKILL.md",
-+      "computedHash": "ad03e8d4ea3cbbff66420eb7ba3cc375b5cbe1821a2449b53e863256cf5b5cde"
-+    },
-+    "implement": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/implement/SKILL.md",
-+      "computedHash": "2139cfedf24791adbc839aaab6019cff158af1e28bfead020ec6e0ce01b3e74d"
-+    },
-+    "improve-codebase-architecture": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
-+      "computedHash": "bce096b49db40761adb1d5348f064c303fc152e4e50fc3fd81b79df8b6cf137f"
-+    },
-+    "prototype": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/prototype/SKILL.md",
-+      "computedHash": "73862de6cd32acf30799bfb2220357b96c1a58ab0e3d01126b769fd659d6555a"
-+    },
-+    "research": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/research/SKILL.md",
-+      "computedHash": "bd3e2c6826671d82c86ed0da3dac3370ebcf63b0fe847f91bb444e1fb7dac21b"
-+    },
-+    "resolving-merge-conflicts": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/resolving-merge-conflicts/SKILL.md",
-+      "computedHash": "28aad6f8b1b7025abc8892fa8890f68fe1533499b28a565f416b159131d22fad"
-+    },
-+    "setup-matt-pocock-skills": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
-+      "computedHash": "f9c2b933dda18eea572e96f6ebbcd5b30e0d1bfdc074af53cc99728dc5f0bdac"
-+    },
-+    "tdd": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/tdd/SKILL.md",
-+      "computedHash": "614ac2e45fb0ec02f6ce422d26bd9aa4e33aa4867323f5a3a5c0c20b96f78ff4"
-+    },
-+    "teach": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/productivity/teach/SKILL.md",
-+      "computedHash": "68999bb1a241384b2f921f3321d779b7d05eb6089077b70d88cee2aee3d75ccc"
-+    },
-+    "to-questionnaire": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/productivity/to-questionnaire/SKILL.md",
-+      "computedHash": "d8938509f3400d9977343e11e876fc6e1982b0b9c133a2f2e9d3d730a67a103e"
-+    },
-+    "to-spec": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/to-spec/SKILL.md",
-+      "computedHash": "7e07d4cfabd1a4f61627ebe2705601784fae7b9aca7e13af3e201ace75738200"
-+    },
-+    "to-tickets": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/to-tickets/SKILL.md",
-+      "computedHash": "0349eee265e7005e667b4543de849672106c46d545e998f37d3319300bb07751"
-+    },
-+    "triage": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/triage/SKILL.md",
-+      "computedHash": "1bc5349f0b61e19a6df61496b5a03d88cd69595dd303353f87945997a9e4a884"
-+    },
-+    "wait-what": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/productivity/wait-what/SKILL.md",
-+      "computedHash": "9638acdcd76457ca70a007b5a02c4bf44893fb3064692a9158d907e82f200eec"
-+    },
-+    "wayfinder": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/wayfinder/SKILL.md",
-+      "computedHash": "f343ecf46157cb645a5494644418308ad95391e9fc696faa47ae5a412bf5f6e4"
-+    },
-+    "wizard": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/engineering/wizard/SKILL.md",
-+      "computedHash": "2c0d1187398b1b7ebb9902a4c91b24181ee07892f285615b46c59f45e2c4229c"
-+    },
-+    "writing-for-agents": {
-+      "source": "mattpocock/skills",
-+      "sourceType": "github",
-+      "skillPath": "skills/productivity/writing-for-agents/SKILL.md",
-+      "computedHash": "ccfa1e94d8f6ab5c6a1edd55293ca477faf93c39207771331efdb1e798ed21d6"
-+    }
-+  }
-+}
++++ b/scripts/requirements-anytext2-compat.txt
+@@ -0,0 +1,20 @@
++# SynSLP AnyText2 Verified Compatibility Package Pins
++# Tested on Python 3.10 with PyTorch 2.1.0+cu121 on NVIDIA GeForce RTX 4090
++
++# Build and C extensions compatibility
++setuptools==69.5.1
++numpy==1.24.4
++Pillow==9.5.0
++opencv-python==4.7.0.72
++
++# Deep learning framework and pipeline compatibility
++pytorch-lightning==1.9.5
++diffusers==0.10.2
++huggingface-hub==0.25.2
++tokenizers==0.15.2
++transformers==4.38.2
++
++# Upstream runtime dependencies
++opencc==1.4.2
++datasets>=2.14.0
++modelscope>=1.23.0
+diff --git a/scripts/run_anytext2_demo.sh b/scripts/run_anytext2_demo.sh
+index 833ce0d..bca76fa 100644
+--- a/scripts/run_anytext2_demo.sh
++++ b/scripts/run_anytext2_demo.sh
+@@ -5,6 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ ANYTEXT2_DIR="$ROOT_DIR/third_party/AnyText2"
+ ENV_NAME="anytext2"
+ 
++if ! command -v conda >/dev/null 2>&1; then
++  for candidate in "/mnt/data/zyx/miniconda3/bin" "$HOME/miniconda3/bin" "$HOME/anaconda3/bin"; do
++    if [[ -x "$candidate/conda" ]]; then
++      export PATH="$candidate:$PATH"
++      break
++    fi
++  done
++fi
++
+ [[ -d "$ANYTEXT2_DIR" ]] || { echo "ERROR: $ANYTEXT2_DIR not found. Run scripts/setup_anytext2.sh first."; exit 1; }
+ 
+ cd "$ANYTEXT2_DIR"
+diff --git a/scripts/setup_anytext2.sh b/scripts/setup_anytext2.sh
+index 2918f9e..a3f1be9 100644
+--- a/scripts/setup_anytext2.sh
++++ b/scripts/setup_anytext2.sh
+@@ -7,28 +7,72 @@ ANYTEXT2_DIR="$THIRD_PARTY_DIR/AnyText2"
+ ENV_NAME="anytext2"
+ UPSTREAM_URL="https://github.com/tyxsspa/AnyText2.git"
+ ANYTEXT2_REV="${ANYTEXT2_REV:-b06c583a583818f3679665ef67b51363f107853c}"
++PATCH_FILE="$ROOT_DIR/patches/anytext2/0001-anytext2-compatibility.patch"
++COMPAT_REQ="$ROOT_DIR/scripts/requirements-anytext2-compat.txt"
++
++# Locate conda if running under non-interactive SSH
++if ! command -v conda >/dev/null 2>&1; then
++  for candidate in "/mnt/data/zyx/miniconda3/bin" "$HOME/miniconda3/bin" "$HOME/anaconda3/bin"; do
++    if [[ -x "$candidate/conda" ]]; then
++      export PATH="$candidate:$PATH"
++      break
++    fi
++  done
++fi
+ 
+ command -v git >/dev/null 2>&1 || { echo "ERROR: git not found"; exit 1; }
+ command -v conda >/dev/null 2>&1 || { echo "ERROR: conda not found"; exit 1; }
+ 
+ mkdir -p "$THIRD_PARTY_DIR"
+ 
++# 1. Clone or fetch pinned upstream commit
+ if [[ ! -d "$ANYTEXT2_DIR/.git" ]]; then
++  echo "[SynSLP] Cloning upstream AnyText2..."
+   git clone "$UPSTREAM_URL" "$ANYTEXT2_DIR"
+ fi
+ 
++echo "[SynSLP] Checking out pinned AnyText2 commit: $ANYTEXT2_REV"
+ git -C "$ANYTEXT2_DIR" fetch --all --tags
+ git -C "$ANYTEXT2_DIR" checkout --detach "$ANYTEXT2_REV"
+ 
++# 2. Idempotently apply repository-controlled compatibility patch
++if [[ -f "$PATCH_FILE" ]]; then
++  if git -C "$ANYTEXT2_DIR" apply --check "$PATCH_FILE" >/dev/null 2>&1; then
++    echo "[SynSLP] Applying compatibility patch: $(basename "$PATCH_FILE")"
++    git -C "$ANYTEXT2_DIR" apply "$PATCH_FILE"
++  elif git -C "$ANYTEXT2_DIR" apply -R --check "$PATCH_FILE" >/dev/null 2>&1; then
++    echo "[SynSLP] Compatibility patch already applied: $(basename "$PATCH_FILE")"
++  else
++    echo "ERROR: Compatibility patch cannot be applied cleanly to AnyText2."
++    exit 1
++  fi
++else
++  echo "ERROR: Compatibility patch not found at $PATCH_FILE"
++  exit 1
++fi
++
++# 3. Create or update isolated conda environment
+ if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
+-  echo "[SynSLP] Updating existing conda env: $ENV_NAME"
+-  conda env update -n "$ENV_NAME" -f "$ANYTEXT2_DIR/environment.yaml" --prune
++  echo "[SynSLP] Using existing conda env: $ENV_NAME"
+ else
+   echo "[SynSLP] Creating conda env from upstream environment.yaml"
+   conda env create -f "$ANYTEXT2_DIR/environment.yaml"
+ fi
+ 
+-echo "[SynSLP] Downloading official AnyText2 checkpoint: iic/cv_anytext2"
++# 4. Enforce CUDA-enabled PyTorch build and compatibility pins
++echo "[SynSLP] Ensuring CUDA-enabled PyTorch 2.1.0..."
++if ! conda run -n "$ENV_NAME" python -c "import torch; assert torch.cuda.is_available()" >/dev/null 2>&1; then
++  echo "[SynSLP] Reinstalling PyTorch with CUDA 12.1..."
++  conda run -n "$ENV_NAME" python -m pip install torch==2.1.0+cu121 torchvision==0.16.0+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
++fi
++
++if [[ -f "$COMPAT_REQ" ]]; then
++  echo "[SynSLP] Enforcing verified compatibility package pins..."
++  conda run -n "$ENV_NAME" python -m pip install -r "$COMPAT_REQ"
++fi
++
++# 5. Download and verify official checkpoint
++echo "[SynSLP] Downloading/verifying official AnyText2 checkpoint: iic/cv_anytext2"
+ export ANYTEXT2_DIR
+ conda run -n "$ENV_NAME" python - <<'PY'
+ import os
+@@ -39,21 +83,23 @@ from modelscope import snapshot_download
+ dst = Path(os.environ["ANYTEXT2_DIR"]) / "models"
+ dst.mkdir(parents=True, exist_ok=True)
+ 
+-src = Path(snapshot_download("iic/cv_anytext2"))
+-for item in src.iterdir():
+-    target = dst / item.name
+-    if item.is_dir():
+-        shutil.copytree(item, target, dirs_exist_ok=True)
+-    else:
+-        shutil.copy2(item, target)
+-
+ ckpt = dst / "anytext_v2.0.ckpt"
++if not ckpt.exists():
++    print("[SynSLP] Checkpoint not found locally. Downloading from ModelScope...")
++    src = Path(snapshot_download("iic/cv_anytext2"))
++    for item in src.iterdir():
++        target = dst / item.name
++        if item.is_dir():
++            shutil.copytree(item, target, dirs_exist_ok=True)
++        else:
++            shutil.copy2(item, target)
++
+ if not ckpt.exists():
+     raise FileNotFoundError(f"Expected checkpoint not found: {ckpt}")
+ 
+-print(f"[SynSLP] checkpoint ready: {ckpt}")
++print(f"[SynSLP] Checkpoint ready: {ckpt} ({ckpt.stat().st_size / (1024**3):.2f} GB)")
+ PY
+ 
+ echo
+-echo "[SynSLP] AnyText2 deployment files are ready."
++echo "[SynSLP] AnyText2 deployment files and environment are ready."
+ echo "Next: bash scripts/check_anytext2.sh"
